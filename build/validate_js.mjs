@@ -70,6 +70,20 @@ const w2 = eng.hrpWeights(R);
 chk(w.every((x,i)=>x===w2[i]), 'HRP deterministic');
 
 fs.unlinkSync('build/_engine.mjs');
+
+// 5) The Expo app's generated engine must be identical to the shipped template
+const appEng = await import('../app/engine.js');
+for (const [s, exp] of Object.entries(expected.sharpe)){
+  if (exp === null) continue;
+  const m = appEng.sharpeMomentum(BYSYM[s].closes, asof, 252, 21);
+  chk(m && close(m.sharpe, exp.sharpe, 1e-10), `app engine ${s} sharpe`);
+}
+const wApp = appEng.hrpWeights(R);
+for (let i = 0; i < sel.length; i++)
+  chk(close(wApp[i], expected.hrp_weights[i], 1e-8), `app engine HRP ${sel[i]}`);
+const capApp = appEng.applyCaps(wApp, secs, expected.caps.maxStock, expected.caps.maxSector);
+chk(close(capApp.w.reduce((a,b)=>a+b,0), 1, 1e-12), 'app engine caps sum to 1');
+
 console.log(`\n${checks-fails}/${checks} checks passed`);
 if (fails){ console.log(`${fails} FAILURES`); process.exit(1); }
-console.log('JS numerics match Python reference ✓');
+console.log('JS numerics (template + Expo engine) match Python reference ✓');

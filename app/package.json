@@ -1,0 +1,12 @@
+{
+  "name": "momentum-screener",
+  "version": "1.0.0",
+  "main": "App.js",
+  "dependencies": {
+    "expo-haptics": "*",
+    "expo-status-bar": "*",
+    "react-native-svg": "*",
+    "react-native-safe-area-context": "*",
+    "@react-native-async-storage/async-storage": "*"
+  }
+}
