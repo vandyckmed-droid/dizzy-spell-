@@ -509,17 +509,22 @@ function Stat({ C, v, l, color }) {
   );
 }
 function Segmented({ C, options, value, onChange }) {
+  // horizontal pill row — scales to any number of universes
   return (
-    <View style={[styles.seg, { backgroundColor: C.surface2, borderColor: C.line }]}>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ gap: 8, paddingVertical: 2, paddingRight: 8 }}
+      style={{ marginTop: 4, marginHorizontal: -2 }}>
       {options.map(o => {
         const on = o.id === value;
         return (
-          <Pressable key={o.id} onPress={() => onChange(o.id)} style={[styles.segBtn, on && { backgroundColor: C.raised }]}>
-            <Text numberOfLines={1} style={{ color: on ? C.text : C.muted, fontSize: 12.5, fontWeight: '600', textAlign: 'center' }}>{o.label}</Text>
+          <Pressable key={o.id} onPress={() => onChange(o.id)}
+            accessibilityRole="button" accessibilityState={{ selected: on }}
+            style={[styles.pill, { backgroundColor: on ? C.accent : C.surface2, borderColor: on ? C.accent : C.line }]}>
+            <Text numberOfLines={1} style={{ color: on ? C.accentInk : C.muted, fontSize: 13, fontWeight: '700' }}>{o.label}</Text>
           </Pressable>
         );
       })}
-    </View>
+    </ScrollView>
   );
 }
 function Stepper({ C, label, sub, value, onDec, onInc, border }) {
@@ -608,8 +613,7 @@ const styles = StyleSheet.create({
   ctlRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingVertical: 9 },
   stepper: { flexDirection: 'row', alignItems: 'center', borderRadius: 10, borderWidth: 1 },
   stepBtn: { width: 40, height: 34, alignItems: 'center', justifyContent: 'center' },
-  seg: { flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3, gap: 3, marginTop: 2 },
-  segBtn: { flex: 1, paddingVertical: 9, paddingHorizontal: 6, borderRadius: 8, alignItems: 'center' },
+  pill: { paddingHorizontal: 15, paddingVertical: 9, borderRadius: 20, borderWidth: 1 },
   warn: { borderRadius: 14, borderWidth: 1, padding: 12, marginBottom: 12 },
   sectorBar: { flexDirection: 'row', height: 26, borderRadius: 8, overflow: 'hidden', borderWidth: 1, marginTop: 8, marginBottom: 6 },
   legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
