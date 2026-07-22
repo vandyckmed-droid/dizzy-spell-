@@ -5,10 +5,24 @@ building **long-only Hierarchical Risk Parity (HRP)** portfolios with optional
 weight constraints. Three vertically-scrolling views — Screener, Portfolio, and
 Ticker Detail — with no horizontal tables.
 
-**Deliverable:** [`dist/portfolio-screener.html`](dist/portfolio-screener.html)
+## Two ways to run it
+
+**1. Native iPhone app (Expo Go) — recommended.** A React Native app in [`app/`](app/)
+runs in Expo Go with native feel: haptics on select/tab, an SVG sparkline,
+safe-area insets, and system light/dark. It is delivered as a single
+self-contained **Snack** hosted on Expo's servers (code + the key-free
+market-data snapshot baked in), so the private repo stays private and there is
+nothing to copy-paste. Install **Expo Go** from the App Store, then open the
+Snack link (regenerate with `python3 build/save_snack.py`) and tap *Open in Expo Go*.
+
+**2. Static HTML artifact.** [`dist/portfolio-screener.html`](dist/portfolio-screener.html)
 — a single self-contained file. Open it in mobile Safari, or publish it as a
 Claude Artifact ([`dist/artifact-body.html`](dist/artifact-body.html) is the
-body-only variant for the Artifact runtime).
+body-only variant). Viewing it draws zero model usage — it is a static page.
+
+Both share the **same validated math**: `app/engine.js` is auto-generated from the
+HTML template's numerics (`build/make_engine.mjs`) and cross-checked against the
+NumPy reference, so the app and the artifact can never drift.
 
 <p>
   <img src="docs/screener.png" width="30%" alt="Screener">
@@ -116,8 +130,15 @@ excluded), green for gains and red for losses, large touch-friendly type, plus a
 ```bash
 export API_KEY=<your FMP key>        # read at build time only; never shipped
 python3 build/fetch_data.py          # -> data/snapshot.json (+ exclusions)
-python3 build/build_artifact.py      # -> dist/portfolio-screener.html
+python3 build/build_artifact.py      # -> dist/portfolio-screener.html (artifact)
+node    build/make_engine.mjs        # -> app/engine.js (shared numerics)
+cp data/snapshot.json app/snapshot.json
+python3 build/save_snack.py          # -> new Snack URL (prints it) for the Expo app
 ```
+
+To refresh market data in the Expo app, re-run the above and share the new
+Snack URL (an anonymous Snack is immutable, so refreshing data mints a new link).
+The FMP key never appears in the snapshot, the artifact, or the Snack.
 
 ## Verification
 

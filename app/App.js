@@ -16,12 +16,9 @@ import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path, Defs, LinearGradient, Stop } from 'react-native-svg';
 import * as E from './engine';
+import snapshot from './snapshot.json';   // bundled, key-free market-data snapshot
 
-/* ---- data source: raw snapshot on this branch (auto-updates on push) ---- */
-const DATA_URL =
-  'https://raw.githubusercontent.com/vandyckmed-droid/dizzy-spell-/refs/heads/claude/iphone-portfolio-screener-hrp-hf3nj3/data/snapshot.json';
 const STORE_KEY = 'sms.state.v1';
-const CACHE_KEY = 'sms.snapshot.v1';
 
 /* ---- palette (light / dark) ---- */
 const palettes = {
@@ -69,50 +66,27 @@ function Root() {
   const C = palettes[scheme === 'light' ? 'light' : 'dark'];
   const insets = useSafeAreaInsets();
 
-  const [snap, setSnap] = useState(null);
-  const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const snap = snapshot;                        // bundled, key-free market data
   const [st, setSt] = useState(null);           // persisted UI state
   const [tab, setTab] = useState('screener');
   const [detail, setDetail] = useState(null);   // symbol or null
   const [query, setQuery] = useState('');
 
-  /* ---- load persisted state + snapshot (cache-first, then network) ---- */
+  /* ---- load persisted UI state (selections + window + caps) ---- */
   useEffect(() => {
     (async () => {
       let saved = {};
       try { saved = JSON.parse(await AsyncStorage.getItem(STORE_KEY)) || {}; } catch (e) {}
-      let data = null;
-      try { data = JSON.parse(await AsyncStorage.getItem(CACHE_KEY)); } catch (e) {}
-      if (data) { setSnap(data); setLoading(false); }
-      try {
-        const res = await fetch(DATA_URL, { cache: 'no-store' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const fresh = await res.json();
-        setSnap(fresh);
-        try { await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(fresh)); } catch (e) {}
-      } catch (e) {
-        if (!data) setError(String(e.message || e));
-      } finally {
-        setLoading(false);
-      }
-      setSt(prev => normalizeState(saved));
+      setSt(clampState(normalizeState(saved), snap));
     })();
   }, []);
-
-  // finalize state once snapshot is known
-  useEffect(() => {
-    if (snap && st) setSt(s => clampState(s, snap));
-  }, [snap]);  // eslint-disable-line
 
   const persist = useCallback((next) => {
     setSt(next);
     AsyncStorage.setItem(STORE_KEY, JSON.stringify(next)).catch(() => {});
   }, []);
 
-  if (loading && !snap) return <Splash C={C} />;
-  if (error && !snap) return <ErrorView C={C} msg={error} onRetry={() => { setError(null); setLoading(true); reload(setSnap, setError, setLoading); }} />;
-  if (!snap || !st) return <Splash C={C} />;
+  if (!st) return <Splash C={C} />;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: C.ground }} edges={['top','left','right']}>
@@ -128,17 +102,6 @@ function Root() {
       </Modal>
     </SafeAreaView>
   );
-}
-
-async function reload(setSnap, setError, setLoading) {
-  try {
-    const res = await fetch(DATA_URL, { cache: 'no-store' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const fresh = await res.json();
-    setSnap(fresh);
-    AsyncStorage.setItem(CACHE_KEY, JSON.stringify(fresh)).catch(() => {});
-  } catch (e) { setError(String(e.message || e)); }
-  finally { setLoading(false); }
 }
 
 /* ---------------- state helpers ---------------- */
@@ -273,6 +236,8 @@ function RankCard({ C, o, selected, onOpen, onToggle }) {
       </Pressable>
       <Pressable
         onPress={onToggle} hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${t.symbol}`}
         style={[styles.selBtn, { backgroundColor: selected ? C.accent : C.surface2, borderColor: selected ? C.accent : C.lineStrong }]}>
         <Text style={{ fontSize: 22, fontWeight: '600', color: selected ? C.accentInk : C.muted, marginTop: -2 }}>
           {selected ? '✓' : '+'}
@@ -615,20 +580,6 @@ function Splash({ C }) {
     </SafeAreaView>
   );
 }
-function ErrorView({ C, msg, onRetry }) {
-  return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: C.ground, alignItems: 'center', justifyContent: 'center', padding: 28 }}>
-      <StatusBar style="light" />
-      <Text style={{ fontSize: 34, marginBottom: 10 }}>⚠︎</Text>
-      <Text style={{ color: C.text, fontSize: 17, fontWeight: '700', marginBottom: 6 }}>Couldn’t load data</Text>
-      <Text style={{ color: C.muted, fontSize: 13, textAlign: 'center', marginBottom: 18 }}>{msg}</Text>
-      <Pressable onPress={onRetry} style={{ backgroundColor: C.accent, paddingHorizontal: 22, paddingVertical: 12, borderRadius: 12 }}>
-        <Text style={{ color: C.accentInk, fontWeight: '700' }}>Retry</Text>
-      </Pressable>
-    </SafeAreaView>
-  );
-}
-
 function makeColorFor() {
   const map = {};
   return (sec) => {

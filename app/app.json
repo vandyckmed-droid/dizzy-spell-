@@ -2,7 +2,7 @@
   "expo": {
     "name": "Momentum Screener",
     "slug": "momentum-screener",
-    "sdkVersion": "51.0.0",
+    "sdkVersion": "57.0.0",
     "platforms": ["ios", "android"],
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
