@@ -723,6 +723,7 @@ function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen }) {
           <ScrubChart C={C} snap={snap} ticker={t} st={st} />
         </View>
 
+        <View style={{ marginHorizontal: 16 }}>
         <Card C={C} pad={false}>
           <Text style={{ color: C.faint, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase', padding: 16, paddingBottom: 6 }}>
             Performance · adjusted close · as of {asofDate}
@@ -739,6 +740,7 @@ function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen }) {
             );
           })}
         </Card>
+        </View>
 
         <View style={{ paddingHorizontal: 16, marginTop: 4 }}>
           <Pressable
