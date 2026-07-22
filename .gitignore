@@ -11,3 +11,4 @@ app/snapshot.json
 build/rnweb/out.js
 build/rnweb/index.html
 build/snack_url.txt
+build/snack_live_url.txt
