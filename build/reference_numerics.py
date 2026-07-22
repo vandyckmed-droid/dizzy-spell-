@@ -24,6 +24,30 @@ def window_slice(closes, as_of_idx, start_off, end_off):
     return closes[lo:hi + 1]
 
 
+def raw_return(closes, as_of_idx, start_off, end_off):
+    lo = as_of_idx - start_off
+    hi = as_of_idx - end_off
+    if lo < 0 or hi >= len(closes) or hi <= lo:
+        return None
+    return closes[hi] / closes[lo] - 1.0
+
+
+def residual_score(sret, mret):
+    """Market-residual return: sum of residuals after regressing stock daily
+    returns on market daily returns over the window. Returns (beta, resid)."""
+    s = np.asarray(sret, float)
+    m = np.asarray(mret, float)
+    n = min(len(s), len(m))
+    if n < 3:
+        return None
+    s, m = s[:n], m[:n]
+    mm = m.mean()
+    varm = ((m - mm) ** 2).sum()
+    beta = ((s - s.mean()) * (m - mm)).sum() / varm if varm > 0 else 0.0
+    resid = float((s - beta * m).sum())
+    return beta, resid
+
+
 def sharpe_momentum(closes, as_of_idx, start_off, end_off):
     seg = window_slice(closes, as_of_idx, start_off, end_off)
     r = simple_returns(seg)

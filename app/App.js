@@ -52,14 +52,25 @@ const palettes = {
 const SECTOR_COLORS = ['#e8b24a','#2fb574','#5b9df0','#c86bd6','#f0894a','#54c7c7','#e0607e','#9aa7bd','#8bd450','#d64a4a','#6a7bd6'];
 const PERIODS = [['5-day',5],['10-day',10],['1-month',21],['3-month',63],['6-month',126],['1-year',252]];
 
-// Screener sort options (rank badge always reflects Sharpe-momentum rank).
-const SORTS = [
-  { key: 'sharpe', label: 'Sharpe momentum', short: 'Sharpe', get: o => o.m.sharpe, num: true },
-  { key: 'cum', label: 'Cumulative return', short: 'Return', get: o => o.m.cum, num: true },
-  { key: 'annVol', label: 'Annualized volatility', short: 'Vol', get: o => o.m.annVol, num: true },
-  { key: 'marketCap', label: 'Market cap', short: 'Cap', get: o => o.t.marketCap, num: true },
-  { key: 'symbol', label: 'Ticker A–Z', short: 'A–Z', get: o => o.t.symbol, num: false },
+// Ranking factors — the chosen factor sets both the rank order and the
+// highlighted number on each card.
+const FACTORS = [
+  { key: 'sharpe', label: 'Sharpe momentum', short: 'Sharpe', better: 'high', num: true, signed: true, get: o => o.m.sharpe, fmt: v => E.fmtSharpe(v) },
+  { key: 'mom12', label: '12–1 raw momentum', short: '12–1', better: 'high', num: true, signed: true, get: o => o.m.mom12, fmt: v => v == null ? '—' : E.signPct(v, 0) },
+  { key: 'mom6', label: '6–1 raw momentum', short: '6–1', better: 'high', num: true, signed: true, get: o => o.m.mom6, fmt: v => v == null ? '—' : E.signPct(v, 0) },
+  { key: 'resid', label: 'Market-residual return', short: 'Resid', better: 'high', num: true, signed: true, get: o => o.m.resid, fmt: v => v == null ? '—' : E.signPct(v, 0) },
+  { key: 'cum', label: 'Window return', short: 'Return', better: 'high', num: true, signed: true, get: o => o.m.cum, fmt: v => E.signPct(v, 0) },
+  { key: 'annVol', label: 'Annualized volatility', short: 'Vol', better: 'low', num: true, signed: false, get: o => o.m.annVol, fmt: v => E.pct(v, 0) },
+  { key: 'marketCap', label: 'Market cap', short: 'Cap', better: 'high', num: true, signed: false, get: o => o.t.marketCap, fmt: v => E.fmtCap(v) },
+  { key: 'symbol', label: 'Ticker A–Z', short: 'A–Z', better: 'low', num: false, signed: false, get: o => o.t.symbol, fmt: () => '' },
 ];
+function factorCmp(fac, dir, a, b) {
+  if (!fac.num) return dir * String(fac.get(a)).localeCompare(String(fac.get(b)));
+  let av = fac.get(a), bv = fac.get(b);
+  const an = av == null || Number.isNaN(av), bn = bv == null || Number.isNaN(bv);
+  if (an && bn) return 0; if (an) return 1; if (bn) return -1;   // missing values sort last
+  return dir * (av - bv);
+}
 const CAP_BANDS = [
   { key: 'all', label: 'All caps', test: () => true },
   { key: 'mega', label: '≥ $500B', test: mc => mc >= 500e9 },
@@ -167,7 +178,7 @@ function normalizeState(saved) {
     selected: Array.isArray(saved.selected) ? saved.selected : [],
     maxStock: saved.maxStock ?? 0,
     maxSector: saved.maxSector ?? 0,
-    sortKey: saved.sortKey || 'sharpe',
+    factor: saved.factor || saved.sortKey || 'sharpe',
     sortDir: saved.sortDir || 'desc',
     capBand: saved.capBand || 'all',
     exch: Array.isArray(saved.exch) ? saved.exch : [],
@@ -194,38 +205,59 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen, refreshing, o
   const [filterOpen, setFilterOpen] = useState(false);
   const pulse = useRef(new Animated.Value(1)).current;
 
-  // rank by Sharpe within the filtered universe (rank badge = momentum rank)
+  // cap-weighted market daily returns over the whole history (Top-500 pool) — for the residual factor
+  const market = useMemo(() => {
+    const pool = snap.tickers.filter(t => t.universes.includes('us_top500'));
+    const totalCap = pool.reduce((a, t) => a + (t.marketCap || 0), 0) || 1;
+    const M = snap.dates.length - 1;
+    const mret = new Array(M).fill(0);
+    for (const t of pool) {
+      const wgt = (t.marketCap || 0) / totalCap, c = t.closes;
+      for (let k = 0; k < M; k++) mret[k] += wgt * (c[k + 1] / c[k] - 1);
+    }
+    return mret;
+  }, [snap]);
+
+  const fac = FACTORS.find(f => f.key === st.factor) || FACTORS[0];
+  const dir = st.sortDir === 'asc' ? 1 : -1;
+
+  // compute per-ticker factor metrics, then rank by the active factor
   const ranked = useMemo(() => {
     const band = CAP_BANDS.find(b => b.key === st.capBand) || CAP_BANDS[0];
     const exchSet = st.exch && st.exch.length ? new Set(st.exch) : null;
-    const list = snap.tickers.filter(t =>
-      t.universes.includes(st.universe) &&
-      band.test(t.marketCap || 0) &&
-      (!exchSet || exchSet.has(t.exchange)));
+    const lo = st.asof - st.start, hi = st.asof - st.end;
+    const canWin = lo >= 0 && hi > lo && hi <= snap.dates.length - 1;
     const out = [];
-    for (const t of list) {
-      const m = E.sharpeMomentum(t.closes, st.asof, st.start, st.end);
-      if (m) out.push({ t, m });
+    for (const t of snap.tickers) {
+      if (!t.universes.includes(st.universe) || !band.test(t.marketCap || 0) || (exchSet && !exchSet.has(t.exchange))) continue;
+      const sm = E.sharpeMomentum(t.closes, st.asof, st.start, st.end);
+      if (!sm) continue;
+      let resid = null;
+      if (canWin) {
+        const c = t.closes; const sret = [];
+        for (let k = lo; k < hi; k++) sret.push(c[k + 1] / c[k] - 1);
+        const rs = E.residualScore(sret, market.slice(lo, hi));
+        resid = rs ? rs.resid : null;
+      }
+      out.push({ t, m: {
+        sharpe: sm.sharpe, cum: sm.cum, annVol: sm.annVol,
+        mom12: E.rawReturn(t.closes, st.asof, 252, 21),
+        mom6: E.rawReturn(t.closes, st.asof, 126, 21),
+        resid, marketCap: t.marketCap,
+      } });
     }
-    out.sort((a, b) => b.m.sharpe - a.m.sharpe);
+    out.sort((a, b) => factorCmp(fac, dir, a, b));
     out.forEach((o, i) => (o.rank = i + 1));
     return out;
-  }, [snap, st.universe, st.asof, st.start, st.end, st.capBand, st.exch]);
+  }, [snap, market, st.universe, st.asof, st.start, st.end, st.capBand, st.exch, st.factor, st.sortDir]);
 
-  const sortDef = SORTS.find(s => s.key === st.sortKey) || SORTS[0];
-  const dir = st.sortDir === 'asc' ? 1 : -1;
   const q = query.trim().toUpperCase();
-  const displayed = useMemo(() => {
-    let arr = q ? ranked.filter(o => o.t.symbol.includes(q) || o.t.name.toUpperCase().includes(q)) : ranked;
-    arr = arr.slice().sort((a, b) => {
-      const av = sortDef.get(a), bv = sortDef.get(b);
-      return sortDef.num ? dir * (av - bv) : dir * String(av).localeCompare(String(bv));
-    });
-    return arr;
-  }, [ranked, q, st.sortKey, st.sortDir]);
+  const displayed = useMemo(() =>
+    q ? ranked.filter(o => o.t.symbol.includes(q) || o.t.name.toUpperCase().includes(q)) : ranked,
+    [ranked, q]);
 
   const selSet = new Set(st.selected);
-  const sig = `${st.universe}|${st.sortKey}|${st.sortDir}|${st.capBand}|${st.exch.join(',')}`;
+  const sig = `${st.universe}|${st.factor}|${st.sortDir}|${st.capBand}|${st.exch.join(',')}`;
   useEffect(() => {
     pulse.setValue(0.4);
     Animated.timing(pulse, { toValue: 1, duration: 260, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
@@ -239,10 +271,10 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen, refreshing, o
     haptic('select');
     persist(next);
   };
-  const chooseSort = (key) => {
+  const chooseFactor = (key) => {
     haptic('select');
-    if (key === st.sortKey) persist({ ...st, sortDir: st.sortDir === 'desc' ? 'asc' : 'desc' });
-    else persist({ ...st, sortKey: key, sortDir: key === 'symbol' ? 'asc' : 'desc' });
+    if (key === st.factor) persist({ ...st, sortDir: st.sortDir === 'desc' ? 'asc' : 'desc' });
+    else { const f = FACTORS.find(x => x.key === key); persist({ ...st, factor: key, sortDir: f && f.better === 'low' ? 'asc' : 'desc' }); }
   };
   const setFilter = (patch) => { animateNext(); haptic('select'); persist({ ...st, ...patch }); };
   const activeFilters = (st.capBand !== 'all' ? 1 : 0) + (st.exch.length ? 1 : 0);
@@ -287,10 +319,10 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen, refreshing, o
               ⚑ Filter{activeFilters ? ` · ${activeFilters}` : ''}
             </Text>
           </Pressable>
-          <Pressable onPress={() => setSortOpen(true)} accessibilityLabel="Sort"
+          <Pressable onPress={() => setSortOpen(true)} accessibilityLabel="Rank by"
             style={[styles.miniBtn, { backgroundColor: C.surface2, borderColor: C.line }]}>
             <Text style={{ color: C.text, fontSize: 12, fontWeight: '700' }}>
-              {sortDef.short} {st.sortDir === 'desc' ? '↓' : '↑'}
+              {fac.short} {st.sortDir === 'desc' ? '↓' : '↑'}
             </Text>
           </Pressable>
         </View>
@@ -310,23 +342,35 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen, refreshing, o
         initialNumToRender={14} maxToRenderPerBatch={16} windowSize={10} removeClippedSubviews
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} />}
         renderItem={({ item }) => (
-          <RankCard C={C} o={item} selected={selSet.has(item.t.symbol)}
+          <RankCard C={C} o={item} fac={fac} selected={selSet.has(item.t.symbol)}
             onOpen={() => onOpen(item.t.symbol)}
             onToggle={() => persist(toggleSel(st, item.t.symbol))} />
         )} />
 
-      <SortSheet C={C} visible={sortOpen} onClose={() => setSortOpen(false)}
-        sortKey={st.sortKey} sortDir={st.sortDir}
-        onChoose={(k) => { const diff = k !== st.sortKey; chooseSort(k); if (diff) setSortOpen(false); }} />
+      <RankSheet C={C} visible={sortOpen} onClose={() => setSortOpen(false)}
+        factor={st.factor} sortDir={st.sortDir}
+        onChoose={(k) => { const diff = k !== st.factor; chooseFactor(k); if (diff) setSortOpen(false); }} />
       <FilterSheet C={C} visible={filterOpen} onClose={() => setFilterOpen(false)}
         st={st} setFilter={setFilter} />
     </Animated.View>
   );
 }
 
-function RankCard({ C, o, selected, onOpen, onToggle }) {
+function RankCard({ C, o, fac, selected, onOpen, onToggle }) {
   const { t, m, rank } = o;
-  const sc = m.sharpe >= 0 ? C.gain : C.loss;
+  // big number = the active ranking factor's value; sub-line = context metrics
+  let big, bigColor, sub;
+  if (fac.key === 'symbol') {
+    big = E.fmtSharpe(m.sharpe); bigColor = m.sharpe >= 0 ? C.gain : C.loss;
+    sub = `${E.signPct(m.cum)} · σ ${E.pct(m.annVol, 0)}`;
+  } else {
+    const v = fac.get(o);
+    big = fac.fmt(v);
+    bigColor = v == null ? C.faint : (fac.signed ? (v >= 0 ? C.gain : C.loss) : C.text);
+    sub = (fac.key === 'cum' || fac.key === 'annVol')
+      ? `Sharpe ${E.fmtSharpe(m.sharpe)}`
+      : `${E.signPct(m.cum)} · σ ${E.pct(m.annVol, 0)}`;
+  }
   const scale = useRef(new Animated.Value(1)).current;
   const onSel = () => {
     Animated.sequence([
@@ -344,9 +388,9 @@ function RankCard({ C, o, selected, onOpen, onToggle }) {
           <Text numberOfLines={1} style={[styles.cname, { color: C.muted }]}>{t.name}</Text>
           <Text style={[styles.csec, { color: C.faint }]}>{t.sector}</Text>
         </View>
-        <View style={{ alignItems: 'flex-end', minWidth: 78 }}>
-          <Text style={[styles.big, { color: sc }]}>{E.fmtSharpe(m.sharpe)}</Text>
-          <Text style={[styles.metricSub, { color: C.muted }]}>{E.signPct(m.cum)} · σ {E.pct(m.annVol, 0)}</Text>
+        <View style={{ alignItems: 'flex-end', minWidth: 84 }}>
+          <Text style={[styles.big, { color: bigColor }]}>{big}</Text>
+          <Text style={[styles.metricSub, { color: C.muted }]}>{sub}</Text>
         </View>
       </Pressable>
       <Pressable onPress={onSel} hitSlop={8} accessibilityRole="button"
@@ -382,12 +426,12 @@ function Sheet({ C, visible, onClose, children }) {
     </Modal>
   );
 }
-function SortSheet({ C, visible, onClose, sortKey, sortDir, onChoose }) {
+function RankSheet({ C, visible, onClose, factor, sortDir, onChoose }) {
   return (
     <Sheet C={C} visible={visible} onClose={onClose}>
-      <Text style={[styles.sheetTitle, { color: C.text }]}>Sort by</Text>
-      {SORTS.map(s => {
-        const on = s.key === sortKey;
+      <Text style={[styles.sheetTitle, { color: C.text }]}>Rank by</Text>
+      {FACTORS.map(s => {
+        const on = s.key === factor;
         return (
           <Pressable key={s.key} onPress={() => onChoose(s.key)}
             style={[styles.sheetRow, { borderTopColor: C.line }]}>
@@ -396,7 +440,7 @@ function SortSheet({ C, visible, onClose, sortKey, sortDir, onChoose }) {
           </Pressable>
         );
       })}
-      <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 10 }}>Tap the active metric again to flip direction. The rank badge always shows Sharpe-momentum rank.</Text>
+      <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 10 }}>Ranks and the highlighted number update to the chosen factor. 12–1 and 6–1 are fixed-lookback raw returns (skip the last month); residual return strips out market beta. Tap the active factor to flip direction.</Text>
     </Sheet>
   );
 }

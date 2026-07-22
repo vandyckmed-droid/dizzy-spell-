@@ -21,9 +21,9 @@ function grab(name){
   }
   return tpl.slice(start, i);
 }
-const NAMES = ['simpleReturns','mean','sampleStd','sharpeMomentum','covMatrix',
-  'corrFromCov','quasiDiagOrder','clusterVar','recursiveBisection','hrpWeights',
-  'applyCaps','pct'];
+const NAMES = ['simpleReturns','mean','sampleStd','sharpeMomentum','rawReturn',
+  'residualScore','covMatrix','corrFromCov','quasiDiagOrder','clusterVar',
+  'recursiveBisection','hrpWeights','applyCaps','pct'];
 const src = 'const TD=252;\n' + NAMES.map(grab).join('\n') +
   '\nexport {' + NAMES.join(',') + '};';
 fs.writeFileSync('build/_engine.mjs', src);
@@ -43,6 +43,34 @@ for (const [s, exp] of Object.entries(expected.sharpe)){
   chk(m && close(m.annVol, exp.ann_vol, 1e-10), `${s} annVol`);
   chk(m && close(m.cum, exp.cum, 1e-10), `${s} cum`);
   chk(m && m.n === exp.n, `${s} n ${m&&m.n} vs ${exp.n}`);
+}
+
+// 1b) raw momentum factors (12-1, 6-1)
+for (const [s, exp] of Object.entries(expected.factors)){
+  const m12 = eng.rawReturn(BYSYM[s].closes, asof, 252, 21);
+  const m6 = eng.rawReturn(BYSYM[s].closes, asof, 126, 21);
+  chk(exp.mom12 == null ? m12 === null : close(m12, exp.mom12, 1e-10), `${s} mom12`);
+  chk(exp.mom6 == null ? m6 === null : close(m6, exp.mom6, 1e-10), `${s} mom6`);
+}
+
+// 1c) market-residual score (cap-weighted market proxy)
+const pool = snap.tickers.filter(t => t.universes.includes('us_top500'));
+const totalCap = pool.reduce((a, t) => a + (t.marketCap || 0), 0) || 1;
+const mretAll = new Array(snap.dates.length - 1).fill(0);
+for (const t of pool){
+  const wgt = (t.marketCap || 0) / totalCap, c = t.closes;
+  for (let k = 0; k < mretAll.length; k++) mretAll[k] += wgt * (c[k+1]/c[k] - 1);
+}
+{
+  const lo = asof - 252, hi = asof - 21;
+  for (const [s, exp] of Object.entries(expected.resid)){
+    if (exp == null) continue;
+    const c = BYSYM[s].closes;
+    const sret = []; for (let k = lo; k < hi; k++) sret.push(c[k+1]/c[k] - 1);
+    const rs = eng.residualScore(sret, mretAll.slice(lo, hi));
+    chk(rs && close(rs.beta, exp.beta, 1e-9), `${s} resid beta`);
+    chk(rs && close(rs.resid, exp.resid, 1e-9), `${s} resid score`);
+  }
 }
 
 // 2) HRP weights on the exact selection Python used

@@ -357,6 +357,31 @@ function sharpeMomentum(closes, asof, start, end){
   return { sharpe, annRet, annVol, cum, n: r.length };
 }
 
+// Raw price momentum: cumulative adjusted-close return over [asof-startOff, asof-endOff].
+// 12-1 momentum = rawReturn(closes, asof, 252, 21); 6-1 = rawReturn(closes, asof, 126, 21).
+function rawReturn(closes, asof, startOff, endOff){
+  const lo = asof - startOff, hi = asof - endOff;
+  if (lo < 0 || hi >= closes.length || hi <= lo) return null;
+  return closes[hi] / closes[lo] - 1;
+}
+
+// Market-residual return: the part of a name's window return not explained by its
+// market beta. sret / mret are same-length daily-return arrays over the window;
+// beta = cov(s,m)/var(m); residual = Σ(sret − beta·mret).
+function residualScore(sret, mret){
+  const n = Math.min(sret.length, mret.length);
+  if (n < 3) return null;
+  let sm = 0, mm = 0;
+  for (let i = 0; i < n; i++) { sm += sret[i]; mm += mret[i]; }
+  sm /= n; mm /= n;
+  let cov = 0, varm = 0;
+  for (let i = 0; i < n; i++) { const dm = mret[i] - mm; cov += (sret[i] - sm) * dm; varm += dm * dm; }
+  const beta = varm > 0 ? cov / varm : 0;
+  let resid = 0;
+  for (let i = 0; i < n; i++) resid += sret[i] - beta * mret[i];
+  return { beta, resid };
+}
+
 /* ---------- HRP (average linkage, quasi-diag, recursive IVP) ---------- */
 function covMatrix(R){                       // R: T×N returns -> N×N sample cov
   const T = R.length, Nn = R[0].length;

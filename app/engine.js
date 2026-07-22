@@ -30,6 +30,26 @@ function sharpeMomentum(closes, asof, start, end){
   return { sharpe, annRet, annVol, cum, n: r.length };
 }
 
+function rawReturn(closes, asof, startOff, endOff){
+  const lo = asof - startOff, hi = asof - endOff;
+  if (lo < 0 || hi >= closes.length || hi <= lo) return null;
+  return closes[hi] / closes[lo] - 1;
+}
+
+function residualScore(sret, mret){
+  const n = Math.min(sret.length, mret.length);
+  if (n < 3) return null;
+  let sm = 0, mm = 0;
+  for (let i = 0; i < n; i++) { sm += sret[i]; mm += mret[i]; }
+  sm /= n; mm /= n;
+  let cov = 0, varm = 0;
+  for (let i = 0; i < n; i++) { const dm = mret[i] - mm; cov += (sret[i] - sm) * dm; varm += dm * dm; }
+  const beta = varm > 0 ? cov / varm : 0;
+  let resid = 0;
+  for (let i = 0; i < n; i++) resid += sret[i] - beta * mret[i];
+  return { beta, resid };
+}
+
 function covMatrix(R){                       // R: T×N returns -> N×N sample cov
   const T = R.length, Nn = R[0].length;
   const mu = new Array(Nn).fill(0);
@@ -197,4 +217,4 @@ function fmtCap(x){ if(x>=1e12) return '$'+(x/1e12).toFixed(2)+'T'; if(x>=1e9) r
 
 function clsOf(x){ return x>=0?'gain':'loss'; }
 
-export { simpleReturns, mean, sampleStd, sharpeMomentum, covMatrix, corrFromCov, quasiDiagOrder, clusterVar, recursiveBisection, hrpWeights, applyCaps, periodReturn, pct, signPct, fmtSharpe, fmtCap, clsOf, TD };
+export { simpleReturns, mean, sampleStd, sharpeMomentum, rawReturn, residualScore, covMatrix, corrFromCov, quasiDiagOrder, clusterVar, recursiveBisection, hrpWeights, applyCaps, periodReturn, pct, signPct, fmtSharpe, fmtCap, clsOf, TD };

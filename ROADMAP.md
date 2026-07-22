@@ -26,20 +26,27 @@ Status: ✅ done · 🚧 in progress · ⬜ planned/candidate.
   excludes ETFs/funds/non-common/SPACs/bad data; share-class dedup by CIK (most liquid)
 - ✅ 🟢 Per-sector sub-universes as tags + horizontal pill selector
 
-### V2 batch (this round)
+### V2 batch
 - ✅ 🟢 **Interactive price chart** in detail — touch & drag to scrub, ranking window shaded,
   live price/date/return readout, crosshair, haptic ticks
 - ✅ 🟢 **Pull-to-refresh** (pulls latest snapshot from public raw), **skeleton loader** on launch,
   **richer haptics & animations** (select-button pop, animated weight bars, tab/list fades)
-- ✅ 🟢 **Sort & filter the screener** — sort by Sharpe / return / vol / market cap / A–Z (tap to
-  flip direction); filter by market-cap band and exchange
+- ✅ 🟢 **Sort & filter the screener** — filter by market-cap band and exchange
+
+### V3 batch — ranking factors
+- ✅ 🟡 **Rank-by factor selector** — the chosen factor sets both the rank order and the
+  highlighted card number. Factors: **Sharpe momentum**, **12–1 raw momentum**,
+  **6–1 raw momentum**, **market-residual return** (return net of market beta),
+  window return, annualized vol (low-vol), market cap, A–Z. Tap to flip direction.
+  All factor math validated against the NumPy reference (222 checks).
+- ❌ Declined: composite multi-factor blend, Sortino, trend-vs-200d (prefer raw-return factors)
 
 ---
 
 ## ⬜ Candidate — deeper ranking (the "rank" half)
-- ⬜ 🟡 Multi-factor scoring — momentum (12-1), Sortino, low-vol, trend (vs 200-day); blend with weights
 - ⬜ 🟢 Risk-free rate input (true Sharpe)
 - ⬜ 🟡 Sector-relative ranking (rank within sector)
+- ⬜ 🟡 Configurable momentum lookbacks (e.g. 3–1, 9–1) beyond the fixed 12–1 / 6–1
 
 ## ⬜ Candidate — smarter weighting & risk (the "weight" half)
 - ⬜ 🟡 Compare weighting schemes (HRP vs equal / inverse-vol / min-variance)
