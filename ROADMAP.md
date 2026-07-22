@@ -45,6 +45,14 @@ Status: ✅ done · 🚧 in progress · ⬜ planned/candidate.
 - ❌ Reverted: the fixed 12–1 / 6–1 / residual "factor" popup (superseded by the configurable score)
 - ❌ Declined: composite multi-factor blend, Sortino, trend-vs-200d
 
+### V3.1 polish
+- ✅ 🟢 Count line shows selections **within the current ranked list** ("N selected here")
+- ✅ 🟢 **Clear basket** button (with confirm) on the Portfolio view
+- ✅ 🟢 Ticker detail rebalanced — taller price chart, more compact performance card
+- ✅ 🟡 **Most-correlated peers** on the ticker detail — top 3 by daily-return correlation
+  (latest 252d), tappable to navigate (e.g. NVDA → TSM/AVGO/VRT, JPM → BAC/WFC/C)
+- ⬜ 🟡 Ticker-detail tabs — split into sub-tabs as more per-name info is added (deferred until the view grows)
+
 ---
 
 ## ⬜ Candidate — deeper ranking (the "rank" half)

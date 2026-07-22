@@ -7,7 +7,7 @@
    ====================================================================== */
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
-  View, Text, ScrollView, FlatList, Pressable, TextInput, Modal, RefreshControl, Switch,
+  View, Text, ScrollView, FlatList, Pressable, TextInput, Modal, RefreshControl, Switch, Alert,
   StyleSheet, useColorScheme, Animated, Easing, LayoutAnimation, Platform, UIManager,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -171,7 +171,7 @@ function Root() {
       </Animated.View>
       <TabBar C={C} tab={tab} setTab={setTab} count={st.selected.length} insets={insets} />
       <Modal visible={!!detail} animationType="slide" onRequestClose={() => setDetail(null)} presentationStyle="fullScreen">
-        {detail && <Detail C={C} snap={snap} market={market} st={st} sym={detail} onClose={() => setDetail(null)} onToggle={(s) => persist(toggleSel(st, s))} />}
+        {detail && <Detail C={C} snap={snap} market={market} st={st} sym={detail} onClose={() => setDetail(null)} onToggle={(s) => persist(toggleSel(st, s))} onOpen={setDetail} />}
       </Modal>
     </SafeAreaView>
   );
@@ -250,6 +250,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
     [ranked, q]);
 
   const selSet = new Set(st.selected);
+  const selInView = ranked.reduce((n, o) => n + (selSet.has(o.t.symbol) ? 1 : 0), 0);
   const sig = `${st.universe}|${st.mode}|${st.removeMkt}|${st.matchVol}|${st.sortDir}|${st.capBand}|${st.exch.join(',')}`;
   useEffect(() => {
     pulse.setValue(0.4);
@@ -326,7 +327,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
 
       <View style={styles.countLine}>
         <Text style={{ color: C.muted, fontSize: 12 }}>
-          <Text style={{ color: C.text, fontWeight: '700' }}>{displayed.length}</Text> ranked · {selSet.size} selected
+          <Text style={{ color: C.text, fontWeight: '700' }}>{displayed.length}</Text> ranked · {selInView} selected here
         </Text>
         <View style={{ flexDirection: 'row', gap: 8 }}>
           <Pressable onPress={() => setFilterOpen(true)} accessibilityLabel="Filter"
@@ -540,6 +541,12 @@ function Portfolio({ C, snap, st, persist, onOpen, refreshing, onRefresh }) {
     haptic('select');
     persist({ ...st, [key]: v });
   };
+  const clearBasket = () => {
+    Alert.alert('Clear basket?', `Remove all ${pf.syms.length} holding${pf.syms.length === 1 ? '' : 's'}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Clear', style: 'destructive', onPress: () => { haptic('warn'); persist({ ...st, selected: [] }); } },
+    ]);
+  };
 
   const total = pf.weights.reduce((a, b) => a + b, 0);
   const sectorTot = {};
@@ -557,6 +564,14 @@ function Portfolio({ C, snap, st, persist, onOpen, refreshing, onRefresh }) {
         <Stat C={C} v={pf.syms.length ? (total * 100).toFixed(total > 0.9999 && total < 1.0001 ? 0 : 1) + '%' : '0%'} l="Allocated" />
         <Stat C={C} v={String(new Set(pf.syms.map(s => BYSYM[s].sector)).size)} l="Sectors" />
       </View>
+      {pf.syms.length > 0 ? (
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: -4, marginBottom: 12 }}>
+          <Pressable onPress={clearBasket} accessibilityLabel="Clear basket"
+            style={[styles.miniBtn, { backgroundColor: C.lossSoft, borderColor: C.loss }]}>
+            <Text style={{ color: C.loss, fontSize: 12, fontWeight: '700' }}>✕ Clear basket</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       <Card C={C}>
         <Eyebrow C={C}>HRP constraints</Eyebrow>
@@ -666,11 +681,14 @@ function computePortfolio(snap, BYSYM, st) {
 }
 
 /* ====================== Ticker detail ====================== */
-function Detail({ C, snap, market, st, sym, onClose, onToggle }) {
+function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen }) {
   const t = snap.tickers.find(x => x.symbol === sym);
   const insets = useSafeAreaInsets();
-  const [inPf, setInPf] = useState(st.selected.includes(sym));
+  const peers = useMemo(() =>
+    t ? topCorrelated(t, snap.tickers.filter(x => x.universes.includes('us_top500')), st.asof, 3) : [],
+    [snap, t, st.asof]);
   if (!t) return null;
+  const inPf = st.selected.includes(sym);
   const m = E.momentumScore(t.closes, market, st.asof, cfgOf(st));
   const asofDate = snap.dates[st.asof];
   const scoreLabel = (st.mode === 'return' ? 'Ann. return' : st.mode === 'vol' ? 'Volatility' : 'Sharpe') + (st.removeMkt ? ' (α)' : '');
@@ -714,7 +732,7 @@ function Detail({ C, snap, market, st, sym, onClose, onToggle }) {
             return (
               <View key={lab} style={[styles.perfRow, { borderTopColor: C.line, borderTopWidth: i ? 1 : 0 }]}>
                 <Text style={{ color: C.muted, fontSize: 16, fontWeight: '600' }}>{lab}</Text>
-                <Text style={{ color: r == null ? C.faint : (r >= 0 ? C.gain : C.loss), fontSize: 26, fontWeight: '800', letterSpacing: -0.5 }}>
+                <Text style={{ color: r == null ? C.faint : (r >= 0 ? C.gain : C.loss), fontSize: 23, fontWeight: '800', letterSpacing: -0.5 }}>
                   {r == null ? '—' : E.signPct(r, 2)}
                 </Text>
               </View>
@@ -724,13 +742,36 @@ function Detail({ C, snap, market, st, sym, onClose, onToggle }) {
 
         <View style={{ paddingHorizontal: 16, marginTop: 4 }}>
           <Pressable
-            onPress={() => { onToggle(sym); setInPf(!inPf); }}
+            onPress={() => onToggle(sym)}
             style={[styles.cta, { backgroundColor: inPf ? C.surface2 : C.accent, borderColor: inPf ? C.lineStrong : C.accent }]}>
             <Text style={{ color: inPf ? C.text : C.accentInk, fontSize: 16, fontWeight: '700' }}>
               {inPf ? '✓ In portfolio — tap to remove' : '+ Add to portfolio'}
             </Text>
           </Pressable>
         </View>
+
+        {peers.length ? (
+          <View style={{ paddingHorizontal: 16, marginTop: 16 }}>
+            <Card C={C} pad={false}>
+              <Text style={{ color: C.faint, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase', padding: 16, paddingBottom: 8 }}>
+                Most correlated · latest 252d
+              </Text>
+              {peers.map((pr, i) => (
+                <Pressable key={pr.t.symbol} onPress={() => { haptic('light'); onOpen(pr.t.symbol); }}
+                  style={[styles.peerRow, { borderTopColor: C.line, borderTopWidth: i ? 1 : 0 }]}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={{ color: C.text, fontSize: 15.5, fontWeight: '700' }}>{pr.t.symbol}
+                      <Text style={{ color: C.faint, fontSize: 12, fontWeight: '500' }}>  {pr.t.sector}</Text>
+                    </Text>
+                    <Text numberOfLines={1} style={{ color: C.muted, fontSize: 12, marginTop: 1 }}>{pr.t.name}</Text>
+                  </View>
+                  <Text style={{ color: C.accent, fontSize: 17, fontWeight: '800', marginLeft: 10 }}>ρ {pr.rho.toFixed(2)}</Text>
+                  <Text style={{ color: C.faint, fontSize: 18, marginLeft: 8 }}>›</Text>
+                </Pressable>
+              ))}
+            </Card>
+          </View>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -740,7 +781,7 @@ function Detail({ C, snap, market, st, sym, onClose, onToggle }) {
 function ScrubChart({ C, snap, ticker, st }) {
   const [w, setW] = useState(0);
   const [idx, setIdx] = useState(null);
-  const H = 168, padX = 6, padTop = 12, padBot = 16;
+  const H = 210, padX = 6, padTop = 12, padBot = 16;
 
   const end = st.asof;
   const series = ticker.closes.slice(0, end + 1);
@@ -953,6 +994,29 @@ function makeColorFor() {
   };
 }
 
+// Top-k names by daily-return correlation with `target` over the latest 252 days.
+function topCorrelated(target, pool, asof, k = 3) {
+  const lo = Math.max(0, asof - 252), hi = asof;
+  if (hi - lo < 20) return [];
+  const ret = (c) => { const r = []; for (let i = lo; i < hi; i++) r.push(c[i + 1] / c[i] - 1); return r; };
+  const a = ret(target.closes);
+  const n = a.length;
+  let am = 0; for (const x of a) am += x; am /= n;
+  let ass = 0; const ad = a.map(x => { const d = x - am; ass += d * d; return d; });
+  const out = [];
+  for (const p of pool) {
+    if (p.symbol === target.symbol || p.closes.length <= hi) continue;
+    const b = ret(p.closes);
+    let bm = 0; for (const x of b) bm += x; bm /= b.length;
+    let bss = 0, dot = 0;
+    for (let i = 0; i < n; i++) { const db = b[i] - bm; bss += db * db; dot += ad[i] * db; }
+    const denom = Math.sqrt(ass * bss);
+    out.push({ t: p, rho: denom > 0 ? dot / denom : 0 });
+  }
+  out.sort((x, y) => y.rho - x.rho);
+  return out.slice(0, k);
+}
+
 /* ====================== styles ====================== */
 const styles = StyleSheet.create({
   cardPanel: { borderRadius: 20, borderWidth: 1, marginBottom: 12 },
@@ -989,7 +1053,8 @@ const styles = StyleSheet.create({
   dback: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'center' },
   tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
   tag: { fontSize: 11, fontWeight: '600', borderWidth: 1, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4, overflow: 'hidden' },
-  perfRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 15, paddingHorizontal: 18 },
+  perfRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 11, paddingHorizontal: 18 },
+  peerRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16 },
   cta: { paddingVertical: 15, borderRadius: 14, borderWidth: 1, alignItems: 'center' },
   tabbar: { flexDirection: 'row', borderTopWidth: 1, paddingTop: 8 },
   tabBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
