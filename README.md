@@ -9,11 +9,16 @@ Ticker Detail — with no horizontal tables.
 
 **1. Native iPhone app (Expo Go) — recommended.** A React Native app in [`app/`](app/)
 runs in Expo Go with native feel: haptics on select/tab, an SVG sparkline,
-safe-area insets, and system light/dark. It is delivered as a single
-self-contained **Snack** hosted on Expo's servers (code + the key-free
-market-data snapshot baked in), so the private repo stays private and there is
-nothing to copy-paste. Install **Expo Go** from the App Store, then open the
-Snack link (regenerate with `python3 build/save_snack.py`) and tap *Open in Expo Go*.
+safe-area insets, and system light/dark. Install **Expo Go** from the App Store,
+open the **Snack** link, and tap *Open in Expo Go*.
+
+The Snack is generated with `python3 build/save_snack.py`:
+
+- **Default (auto-updating).** Because the repo is public, the Snack references
+  the app's raw GitHub files by URL, so the link is short, permanent, and
+  refreshes on every push — nothing to re-share when data is rebuilt.
+- **`--inline` (frozen).** Bakes the code + snapshot into a self-contained Snack
+  that needs no external hosting (use if the repo is private).
 
 **2. Static HTML artifact.** [`dist/portfolio-screener.html`](dist/portfolio-screener.html)
 — a single self-contained file. Open it in mobile Safari, or publish it as a
@@ -72,16 +77,23 @@ The current snapshot holds **520 trading days** for **377 eligible tickers**
 (~1.3 MB), which covers the default 252-day ranking lookback with room to slide
 the as-of date, the 252-day HRP risk window, and the 1-year detail return.
 
-## Reusable universes
+## Universe — US Top 500
 
-Universe definitions live in `UNIVERSES` in `build/fetch_data.py`, kept separate
-from all ranking and portfolio logic. Each is a rule-based screener query (a
-fixed constituent list works the same way). Two ship by default:
+`build/fetch_data.py` builds the universe, kept separate from all ranking and
+portfolio logic: it pulls ~2,100 candidates (≥ $2B) across NYSE / Nasdaq / AMEX,
+cleans them, and retains the **largest 500 eligible companies** by market cap.
 
-- **US Technology (Large-Cap)** — Technology sector among the largest US-traded firms.
-- **US Mid-Cap Core** — a rule-based ~$2B–$20B subset (a stand-in for S&P MidCap 400).
+- Actively traded common stocks; **ADRs and foreign listings allowed** (TSM, ARM, BABA, HSBC, …).
+- Excludes ETFs, funds, non-common share classes (warrants/rights/units/preferreds
+  via symbol pattern), SPACs/shells, invalid price or market cap, and stale /
+  insufficient / erroneous histories (a > 80% single-day move is treated as bad data).
+- Deduplicates share classes by issuer CIK, keeping the **most liquid** class
+  (BRK-B over BRK-A, GOOGL over GOOG). Every drop is recorded in `snapshot.exclusions`.
 
-Supports up to 500 tickers per universe.
+The Top 500 pool also carries **per-sector sub-universes** (Technology, Financials,
+Healthcare, …) as tags — the horizontal pill selector switches between them with no
+extra data. To use fixed constituent lists or different rules instead, edit the
+screener query in `discover_candidates()`.
 
 ## Security eligibility (every exclusion recorded)
 
