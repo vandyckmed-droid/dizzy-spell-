@@ -1,0 +1,7 @@
+node_modules/
+package-lock.json
+build/_engine.mjs
+build/_e.mjs
+build/expected.json
+__pycache__/
+*.pyc
