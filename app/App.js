@@ -1,24 +1,33 @@
 /* ======================================================================
    Sharpe Momentum Screener — Expo (iPhone) app
-   Runs in Expo Go via a single Snack link. Market data is the pre-built,
-   key-free snapshot fetched at runtime from GitHub raw and cached on device.
+   Runs in Expo Go via a single Snack link. Market data is a bundled,
+   key-free snapshot (pull-to-refresh pulls the latest from public GitHub raw).
    All ranking / HRP / constraint math comes from ./engine (validated against
    a NumPy reference — see build/validate_js.mjs).
    ====================================================================== */
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
-  View, Text, ScrollView, FlatList, Pressable, TextInput, Modal,
-  StyleSheet, useColorScheme, ActivityIndicator,
+  View, Text, ScrollView, FlatList, Pressable, TextInput, Modal, RefreshControl,
+  StyleSheet, useColorScheme, Animated, Easing, LayoutAnimation, Platform, UIManager,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Svg, { Path, Defs, LinearGradient, Stop } from 'react-native-svg';
+import Svg, { Path, Defs, LinearGradient, Stop, Line, Circle, Rect } from 'react-native-svg';
 import * as E from './engine';
 import snapshot from './snapshot.json';   // bundled, key-free market-data snapshot
 
 const STORE_KEY = 'sms.state.v1';
+// Latest snapshot on the public repo — used by pull-to-refresh (bundled copy is the fallback).
+const DATA_URL =
+  'https://raw.githubusercontent.com/vandyckmed-droid/dizzy-spell-/refs/heads/claude/iphone-portfolio-screener-hrp-hf3nj3/data/snapshot.json';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+const animateNext = () => LayoutAnimation.configureNext(LayoutAnimation.create(
+  220, LayoutAnimation.Types.easeInEaseOut, LayoutAnimation.Properties.opacity));
 
 /* ---- palette (light / dark) ---- */
 const palettes = {
@@ -43,6 +52,22 @@ const palettes = {
 const SECTOR_COLORS = ['#e8b24a','#2fb574','#5b9df0','#c86bd6','#f0894a','#54c7c7','#e0607e','#9aa7bd','#8bd450','#d64a4a','#6a7bd6'];
 const PERIODS = [['5-day',5],['10-day',10],['1-month',21],['3-month',63],['6-month',126],['1-year',252]];
 
+// Screener sort options (rank badge always reflects Sharpe-momentum rank).
+const SORTS = [
+  { key: 'sharpe', label: 'Sharpe momentum', short: 'Sharpe', get: o => o.m.sharpe, num: true },
+  { key: 'cum', label: 'Cumulative return', short: 'Return', get: o => o.m.cum, num: true },
+  { key: 'annVol', label: 'Annualized volatility', short: 'Vol', get: o => o.m.annVol, num: true },
+  { key: 'marketCap', label: 'Market cap', short: 'Cap', get: o => o.t.marketCap, num: true },
+  { key: 'symbol', label: 'Ticker A–Z', short: 'A–Z', get: o => o.t.symbol, num: false },
+];
+const CAP_BANDS = [
+  { key: 'all', label: 'All caps', test: () => true },
+  { key: 'mega', label: '≥ $500B', test: mc => mc >= 500e9 },
+  { key: 'large', label: '$100–500B', test: mc => mc >= 100e9 && mc < 500e9 },
+  { key: 'mid', label: '< $100B', test: mc => mc < 100e9 },
+];
+const EXCHANGES = ['NYSE', 'NASDAQ', 'AMEX'];
+
 const haptic = (kind = 'select') => {
   try {
     if (kind === 'select') Haptics.selectionAsync();
@@ -66,13 +91,15 @@ function Root() {
   const C = palettes[scheme === 'light' ? 'light' : 'dark'];
   const insets = useSafeAreaInsets();
 
-  const snap = snapshot;                        // bundled, key-free market data
+  const [snap, setSnap] = useState(snapshot);   // bundled; replaced by pull-to-refresh
   const [st, setSt] = useState(null);           // persisted UI state
   const [tab, setTab] = useState('screener');
   const [detail, setDetail] = useState(null);   // symbol or null
   const [query, setQuery] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const fade = useRef(new Animated.Value(0)).current;
 
-  /* ---- load persisted UI state (selections + window + caps) ---- */
+  /* ---- load persisted UI state (selections + window + caps + sort/filter) ---- */
   useEffect(() => {
     (async () => {
       let saved = {};
@@ -81,21 +108,47 @@ function Root() {
     })();
   }, []);
 
+  // re-clamp when the snapshot changes (e.g. after refresh)
+  useEffect(() => { setSt(s => (s ? clampState(s, snap) : s)); }, [snap]);
+
+  // fade the main content in on tab change
+  useEffect(() => {
+    fade.setValue(0);
+    Animated.timing(fade, { toValue: 1, duration: 240, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
+  }, [tab]);
+
   const persist = useCallback((next) => {
     setSt(next);
     AsyncStorage.setItem(STORE_KEY, JSON.stringify(next)).catch(() => {});
   }, []);
 
-  if (!st) return <Splash C={C} />;
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true); haptic('light');
+    try {
+      const url = DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + 't=' + Date.now();
+      const res = await fetch(url, { cache: 'no-store' });
+      if (res.ok) {
+        const fresh = await res.json();
+        if (fresh && Array.isArray(fresh.tickers) && fresh.tickers.length) {
+          setSnap(fresh); haptic('success');
+        }
+      }
+    } catch (e) {}
+    setRefreshing(false);
+  }, []);
+
+  if (!st) return <ScreenerSkeleton C={C} insets={insets} />;
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: C.ground }} edges={['top','left','right']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: C.ground }} edges={['top', 'left', 'right']}>
       <StatusBar style={scheme === 'light' ? 'dark' : 'light'} />
-      <View style={{ flex: 1 }}>
+      <Animated.View style={{ flex: 1, opacity: fade }}>
         {tab === 'screener'
-          ? <Screener C={C} snap={snap} st={st} persist={persist} query={query} setQuery={setQuery} onOpen={setDetail} />
-          : <Portfolio C={C} snap={snap} st={st} persist={persist} onOpen={setDetail} />}
-      </View>
+          ? <Screener C={C} snap={snap} st={st} persist={persist} query={query} setQuery={setQuery}
+              onOpen={setDetail} refreshing={refreshing} onRefresh={onRefresh} />
+          : <Portfolio C={C} snap={snap} st={st} persist={persist} onOpen={setDetail}
+              refreshing={refreshing} onRefresh={onRefresh} />}
+      </Animated.View>
       <TabBar C={C} tab={tab} setTab={setTab} count={st.selected.length} insets={insets} />
       <Modal visible={!!detail} animationType="slide" onRequestClose={() => setDetail(null)} presentationStyle="fullScreen">
         {detail && <Detail C={C} snap={snap} st={st} sym={detail} onClose={() => setDetail(null)} onToggle={(s) => persist(toggleSel(st, s))} />}
@@ -114,6 +167,10 @@ function normalizeState(saved) {
     selected: Array.isArray(saved.selected) ? saved.selected : [],
     maxStock: saved.maxStock ?? 0,
     maxSector: saved.maxSector ?? 0,
+    sortKey: saved.sortKey || 'sharpe',
+    sortDir: saved.sortDir || 'desc',
+    capBand: saved.capBand || 'all',
+    exch: Array.isArray(saved.exch) ? saved.exch : [],
   };
 }
 function clampState(s, snap) {
@@ -132,9 +189,19 @@ function toggleSel(st, sym) {
 }
 
 /* ====================== Screener ====================== */
-function Screener({ C, snap, st, persist, query, setQuery, onOpen }) {
+function Screener({ C, snap, st, persist, query, setQuery, onOpen, refreshing, onRefresh }) {
+  const [sortOpen, setSortOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  // rank by Sharpe within the filtered universe (rank badge = momentum rank)
   const ranked = useMemo(() => {
-    const list = snap.tickers.filter(t => t.universes.includes(st.universe));
+    const band = CAP_BANDS.find(b => b.key === st.capBand) || CAP_BANDS[0];
+    const exchSet = st.exch && st.exch.length ? new Set(st.exch) : null;
+    const list = snap.tickers.filter(t =>
+      t.universes.includes(st.universe) &&
+      band.test(t.marketCap || 0) &&
+      (!exchSet || exchSet.has(t.exchange)));
     const out = [];
     for (const t of list) {
       const m = E.sharpeMomentum(t.closes, st.asof, st.start, st.end);
@@ -143,13 +210,26 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen }) {
     out.sort((a, b) => b.m.sharpe - a.m.sharpe);
     out.forEach((o, i) => (o.rank = i + 1));
     return out;
-  }, [snap, st.universe, st.asof, st.start, st.end]);
+  }, [snap, st.universe, st.asof, st.start, st.end, st.capBand, st.exch]);
 
+  const sortDef = SORTS.find(s => s.key === st.sortKey) || SORTS[0];
+  const dir = st.sortDir === 'asc' ? 1 : -1;
   const q = query.trim().toUpperCase();
-  const filtered = q
-    ? ranked.filter(o => o.t.symbol.includes(q) || o.t.name.toUpperCase().includes(q))
-    : ranked;
+  const displayed = useMemo(() => {
+    let arr = q ? ranked.filter(o => o.t.symbol.includes(q) || o.t.name.toUpperCase().includes(q)) : ranked;
+    arr = arr.slice().sort((a, b) => {
+      const av = sortDef.get(a), bv = sortDef.get(b);
+      return sortDef.num ? dir * (av - bv) : dir * String(av).localeCompare(String(bv));
+    });
+    return arr;
+  }, [ranked, q, st.sortKey, st.sortDir]);
+
   const selSet = new Set(st.selected);
+  const sig = `${st.universe}|${st.sortKey}|${st.sortDir}|${st.capBand}|${st.exch.join(',')}`;
+  useEffect(() => {
+    pulse.setValue(0.4);
+    Animated.timing(pulse, { toValue: 1, duration: 260, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
+  }, [sig]);
 
   const setWin = (patch) => {
     let next = { ...st, ...patch };
@@ -159,6 +239,13 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen }) {
     haptic('select');
     persist(next);
   };
+  const chooseSort = (key) => {
+    haptic('select');
+    if (key === st.sortKey) persist({ ...st, sortDir: st.sortDir === 'desc' ? 'asc' : 'desc' });
+    else persist({ ...st, sortKey: key, sortDir: key === 'symbol' ? 'asc' : 'desc' });
+  };
+  const setFilter = (patch) => { animateNext(); haptic('select'); persist({ ...st, ...patch }); };
+  const activeFilters = (st.capBand !== 'all' ? 1 : 0) + (st.exch.length ? 1 : 0);
 
   const header = (
     <View>
@@ -168,7 +255,7 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen }) {
         <Segmented C={C}
           options={Object.entries(snap.universes).map(([id, u]) => ({ id, label: u.label }))}
           value={st.universe}
-          onChange={(id) => { haptic('select'); persist({ ...st, universe: id }); }} />
+          onChange={(id) => { animateNext(); haptic('select'); persist({ ...st, universe: id }); }} />
         <TextInput
           value={query} onChangeText={setQuery}
           placeholder="Search ticker or company" placeholderTextColor={C.faint}
@@ -191,35 +278,63 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen }) {
 
       <View style={styles.countLine}>
         <Text style={{ color: C.muted, fontSize: 12 }}>
-          <Text style={{ color: C.text, fontWeight: '700' }}>{filtered.length}</Text> ranked · {selSet.size} selected
+          <Text style={{ color: C.text, fontWeight: '700' }}>{displayed.length}</Text> ranked · {selSet.size} selected
         </Text>
-        <Text style={{ color: C.muted, fontSize: 12 }}>Sharpe momentum ▾</Text>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <Pressable onPress={() => setFilterOpen(true)} accessibilityLabel="Filter"
+            style={[styles.miniBtn, { backgroundColor: activeFilters ? C.accentSoft : C.surface2, borderColor: activeFilters ? C.accent : C.line }]}>
+            <Text style={{ color: activeFilters ? C.accent : C.muted, fontSize: 12, fontWeight: '700' }}>
+              ⚑ Filter{activeFilters ? ` · ${activeFilters}` : ''}
+            </Text>
+          </Pressable>
+          <Pressable onPress={() => setSortOpen(true)} accessibilityLabel="Sort"
+            style={[styles.miniBtn, { backgroundColor: C.surface2, borderColor: C.line }]}>
+            <Text style={{ color: C.text, fontSize: 12, fontWeight: '700' }}>
+              {sortDef.short} {st.sortDir === 'desc' ? '↓' : '↑'}
+            </Text>
+          </Pressable>
+        </View>
       </View>
     </View>
   );
 
   return (
-    <FlatList
-      data={filtered}
-      keyExtractor={(o) => o.t.symbol}
-      ListHeaderComponent={header}
-      contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 96 }}
-      keyboardShouldPersistTaps="handled"
-      initialNumToRender={14}
-      maxToRenderPerBatch={16}
-      windowSize={10}
-      removeClippedSubviews
-      renderItem={({ item }) => (
-        <RankCard C={C} o={item} selected={selSet.has(item.t.symbol)}
-          onOpen={() => onOpen(item.t.symbol)}
-          onToggle={() => persist(toggleSel(st, item.t.symbol))} />
-      )} />
+    <Animated.View style={{ flex: 1, opacity: pulse }}>
+      <FlatList
+        data={displayed}
+        keyExtractor={(o) => o.t.symbol}
+        ListHeaderComponent={header}
+        ListEmptyComponent={<Text style={{ color: C.muted, textAlign: 'center', paddingVertical: 40 }}>No matches for this filter.</Text>}
+        contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 96 }}
+        keyboardShouldPersistTaps="handled"
+        initialNumToRender={14} maxToRenderPerBatch={16} windowSize={10} removeClippedSubviews
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} />}
+        renderItem={({ item }) => (
+          <RankCard C={C} o={item} selected={selSet.has(item.t.symbol)}
+            onOpen={() => onOpen(item.t.symbol)}
+            onToggle={() => persist(toggleSel(st, item.t.symbol))} />
+        )} />
+
+      <SortSheet C={C} visible={sortOpen} onClose={() => setSortOpen(false)}
+        sortKey={st.sortKey} sortDir={st.sortDir}
+        onChoose={(k) => { const diff = k !== st.sortKey; chooseSort(k); if (diff) setSortOpen(false); }} />
+      <FilterSheet C={C} visible={filterOpen} onClose={() => setFilterOpen(false)}
+        st={st} setFilter={setFilter} />
+    </Animated.View>
   );
 }
 
 function RankCard({ C, o, selected, onOpen, onToggle }) {
   const { t, m, rank } = o;
   const sc = m.sharpe >= 0 ? C.gain : C.loss;
+  const scale = useRef(new Animated.Value(1)).current;
+  const onSel = () => {
+    Animated.sequence([
+      Animated.timing(scale, { toValue: 0.8, duration: 70, useNativeDriver: true }),
+      Animated.spring(scale, { toValue: 1, friction: 4, tension: 140, useNativeDriver: true }),
+    ]).start();
+    onToggle();
+  };
   return (
     <View style={[styles.card, { backgroundColor: C.surface, borderColor: selected ? C.accent : C.line }]}>
       <Pressable style={styles.cardTap} onPress={onOpen} hitSlop={4}>
@@ -234,14 +349,13 @@ function RankCard({ C, o, selected, onOpen, onToggle }) {
           <Text style={[styles.metricSub, { color: C.muted }]}>{E.signPct(m.cum)} · σ {E.pct(m.annVol, 0)}</Text>
         </View>
       </Pressable>
-      <Pressable
-        onPress={onToggle} hitSlop={8}
-        accessibilityRole="button"
-        accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${t.symbol}`}
-        style={[styles.selBtn, { backgroundColor: selected ? C.accent : C.surface2, borderColor: selected ? C.accent : C.lineStrong }]}>
-        <Text style={{ fontSize: 22, fontWeight: '600', color: selected ? C.accentInk : C.muted, marginTop: -2 }}>
-          {selected ? '✓' : '+'}
-        </Text>
+      <Pressable onPress={onSel} hitSlop={8} accessibilityRole="button"
+        accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${t.symbol}`}>
+        <Animated.View style={[styles.selBtn, { transform: [{ scale }], backgroundColor: selected ? C.accent : C.surface2, borderColor: selected ? C.accent : C.lineStrong }]}>
+          <Text style={{ fontSize: 22, fontWeight: '600', color: selected ? C.accentInk : C.muted, marginTop: -2 }}>
+            {selected ? '✓' : '+'}
+          </Text>
+        </Animated.View>
       </Pressable>
     </View>
   );
@@ -256,8 +370,81 @@ function WindowNote({ C, snap, st }) {
   return <Text style={{ color: warn ? C.loss : C.faint, fontSize: 11.5, marginTop: 8, lineHeight: 16 }}>{msg}</Text>;
 }
 
+/* ---- sort / filter sheets ---- */
+function Sheet({ C, visible, onClose, children }) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.sheetBackdrop} onPress={onClose} />
+      <View style={[styles.sheet, { backgroundColor: C.surface, borderColor: C.line }]}>
+        <View style={[styles.sheetHandle, { backgroundColor: C.lineStrong }]} />
+        {children}
+      </View>
+    </Modal>
+  );
+}
+function SortSheet({ C, visible, onClose, sortKey, sortDir, onChoose }) {
+  return (
+    <Sheet C={C} visible={visible} onClose={onClose}>
+      <Text style={[styles.sheetTitle, { color: C.text }]}>Sort by</Text>
+      {SORTS.map(s => {
+        const on = s.key === sortKey;
+        return (
+          <Pressable key={s.key} onPress={() => onChoose(s.key)}
+            style={[styles.sheetRow, { borderTopColor: C.line }]}>
+            <Text style={{ color: on ? C.accent : C.text, fontSize: 16, fontWeight: on ? '700' : '500' }}>{s.label}</Text>
+            {on ? <Text style={{ color: C.accent, fontSize: 16, fontWeight: '800' }}>{sortDir === 'desc' ? '↓ High→Low' : '↑ Low→High'}</Text> : null}
+          </Pressable>
+        );
+      })}
+      <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 10 }}>Tap the active metric again to flip direction. The rank badge always shows Sharpe-momentum rank.</Text>
+    </Sheet>
+  );
+}
+function FilterSheet({ C, visible, onClose, st, setFilter }) {
+  const toggleExch = (ex) => {
+    const set = new Set(st.exch);
+    set.has(ex) ? set.delete(ex) : set.add(ex);
+    setFilter({ exch: [...set] });
+  };
+  return (
+    <Sheet C={C} visible={visible} onClose={onClose}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Text style={[styles.sheetTitle, { color: C.text, marginBottom: 0 }]}>Filter</Text>
+        <Pressable onPress={() => setFilter({ capBand: 'all', exch: [] })}>
+          <Text style={{ color: C.accent, fontSize: 14, fontWeight: '700' }}>Reset</Text>
+        </Pressable>
+      </View>
+      <Text style={[styles.filterLabel, { color: C.muted }]}>Market cap</Text>
+      <View style={styles.chipWrap}>
+        {CAP_BANDS.map(b => {
+          const on = st.capBand === b.key;
+          return (
+            <Pressable key={b.key} onPress={() => setFilter({ capBand: b.key })}
+              style={[styles.chip, { backgroundColor: on ? C.accent : C.surface2, borderColor: on ? C.accent : C.line }]}>
+              <Text style={{ color: on ? C.accentInk : C.muted, fontSize: 13, fontWeight: '700' }}>{b.label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <Text style={[styles.filterLabel, { color: C.muted }]}>Exchange</Text>
+      <View style={styles.chipWrap}>
+        {EXCHANGES.map(ex => {
+          const on = st.exch.includes(ex);
+          return (
+            <Pressable key={ex} onPress={() => toggleExch(ex)}
+              style={[styles.chip, { backgroundColor: on ? C.accent : C.surface2, borderColor: on ? C.accent : C.line }]}>
+              <Text style={{ color: on ? C.accentInk : C.muted, fontSize: 13, fontWeight: '700' }}>{ex}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 12 }}>No exchange selected = all exchanges.</Text>
+    </Sheet>
+  );
+}
+
 /* ====================== Portfolio ====================== */
-function Portfolio({ C, snap, st, persist, onOpen }) {
+function Portfolio({ C, snap, st, persist, onOpen, refreshing, onRefresh }) {
   const BYSYM = useMemo(() => Object.fromEntries(snap.tickers.map(t => [t.symbol, t])), [snap]);
   const pf = useMemo(() => computePortfolio(snap, BYSYM, st), [snap, st.selected, st.asof, st.maxStock, st.maxSector]);
   const colorFor = useMemo(() => makeColorFor(), [snap]);
@@ -280,7 +467,8 @@ function Portfolio({ C, snap, st, persist, onOpen }) {
   const maxW = Math.max(...rows.map(r => r.w), 0.0001);
 
   return (
-    <ScrollView contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 96 }}>
+    <ScrollView contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 96 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} />}>
       <AppHeader C={C} snap={snap} />
       <View style={styles.statRow}>
         <Stat C={C} v={String(pf.syms.length)} l="Holdings" />
@@ -346,9 +534,7 @@ function Portfolio({ C, snap, st, persist, onOpen }) {
                       <Text style={{ color: C.text, fontWeight: '700', fontSize: 14.5 }}>{t.symbol}</Text>
                       <Text style={{ color: C.faint, fontSize: 12 }}>{t.sector}</Text>
                     </View>
-                    <View style={[styles.bar, { backgroundColor: C.surface2 }]}>
-                      <View style={{ width: `${(r.w / maxW * 100).toFixed(1)}%`, height: '100%', borderRadius: 4, backgroundColor: C.accent }} />
-                    </View>
+                    <AnimatedBar C={C} frac={r.w / maxW} />
                   </Pressable>
                   <Pressable onPress={() => persist(toggleSel(st, r.s))} hitSlop={8}
                     style={[styles.removeBtn, { backgroundColor: C.surface2, borderColor: C.line }]}>
@@ -361,6 +547,19 @@ function Portfolio({ C, snap, st, persist, onOpen }) {
         </>
       )}
     </ScrollView>
+  );
+}
+
+function AnimatedBar({ C, frac }) {
+  const a = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(a, { toValue: Math.max(0, Math.min(1, frac)), duration: 480, easing: Easing.out(Easing.cubic), useNativeDriver: false }).start();
+  }, [frac]);
+  const width = a.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
+  return (
+    <View style={[styles.bar, { backgroundColor: C.surface2 }]}>
+      <Animated.View style={{ width, height: '100%', borderRadius: 4, backgroundColor: C.accent }} />
+    </View>
   );
 }
 
@@ -392,7 +591,6 @@ function Detail({ C, snap, st, sym, onClose, onToggle }) {
   if (!t) return null;
   const m = E.sharpeMomentum(t.closes, st.asof, st.start, st.end);
   const asofDate = snap.dates[st.asof];
-  const series = t.closes.slice(Math.max(0, st.asof - 252), st.asof + 1);
 
   return (
     <View style={{ flex: 1, backgroundColor: C.ground, paddingTop: insets.top }}>
@@ -418,10 +616,9 @@ function Detail({ C, snap, st, sym, onClose, onToggle }) {
           <Stat C={C} v={m ? E.pct(m.annVol, 0) : '—'} l="Ann. vol" />
         </View>
 
-        <Card C={C}>
-          <Eyebrow C={C}>Adjusted close · last 12 months</Eyebrow>
-          <Sparkline C={C} series={series} />
-        </Card>
+        <View style={{ marginHorizontal: 16, marginBottom: 14 }}>
+          <ScrubChart C={C} snap={snap} ticker={t} st={st} />
+        </View>
 
         <Card C={C} pad={false}>
           <Text style={{ color: C.faint, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase', padding: 16, paddingBottom: 6 }}>
@@ -454,28 +651,93 @@ function Detail({ C, snap, st, sym, onClose, onToggle }) {
   );
 }
 
-function Sparkline({ C, series }) {
-  const W = 320, H = 76, pad = 6;
-  if (!series || series.length < 2) return <View style={{ height: H }} />;
+/* ---- interactive, scrubbable price chart with the ranking window shaded ---- */
+function ScrubChart({ C, snap, ticker, st }) {
+  const [w, setW] = useState(0);
+  const [idx, setIdx] = useState(null);
+  const H = 168, padX = 6, padTop = 12, padBot = 16;
+
+  const end = st.asof;
+  const series = ticker.closes.slice(0, end + 1);
+  const dates = snap.dates.slice(0, end + 1);
+  const n = series.length;
+  const winLo = Math.max(0, Math.min(n - 1, st.asof - st.start));
+  const winHi = Math.max(0, Math.min(n - 1, st.asof - st.end));
+
   const lo = Math.min(...series), hi = Math.max(...series), rng = (hi - lo) || 1;
-  const up = series[series.length - 1] >= series[0];
+  const X = (i) => padX + (n <= 1 ? 0 : (i / (n - 1)) * (w - 2 * padX));
+  const Y = (v) => padTop + (1 - (v - lo) / rng) * (H - padTop - padBot);
+
+  const active = idx == null ? n - 1 : idx;
+  const base = series[winLo] || series[0];
+  const price = series[active];
+  const chg = price / base - 1;
+  const up = series[n - 1] >= (series[0] || series[n - 1]);
   const col = up ? C.gain : C.loss;
-  const X = i => pad + (i / (series.length - 1)) * (W - 2 * pad);
-  const Y = v => H - pad - ((v - lo) / rng) * (H - 2 * pad);
-  let d = `M ${X(0)} ${Y(series[0])}`;
-  for (let i = 1; i < series.length; i++) d += ` L ${X(i)} ${Y(series[i])}`;
-  const area = d + ` L ${X(series.length - 1)} ${H - pad} L ${X(0)} ${H - pad} Z`;
+
+  const onTouch = (e) => {
+    if (!w) return;
+    const x = e.nativeEvent.locationX;
+    let i = Math.round(((x - padX) / (w - 2 * padX)) * (n - 1));
+    i = Math.max(0, Math.min(n - 1, i));
+    if (i !== idx) { setIdx(i); haptic('light'); }
+  };
+
+  let line = '', area = '';
+  if (w > 0 && n > 1) {
+    line = `M ${X(0)} ${Y(series[0])}`;
+    for (let i = 1; i < n; i++) line += ` L ${X(i)} ${Y(series[i])}`;
+    area = line + ` L ${X(n - 1)} ${H - padBot} L ${X(0)} ${H - padBot} Z`;
+  }
+
   return (
-    <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{ marginTop: 4 }}>
-      <Defs>
-        <LinearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-          <Stop offset="0" stopColor={col} stopOpacity="0.28" />
-          <Stop offset="1" stopColor={col} stopOpacity="0" />
-        </LinearGradient>
-      </Defs>
-      <Path d={area} fill="url(#g)" />
-      <Path d={d} stroke={col} strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" />
-    </Svg>
+    <View style={[styles.cardPanel, { backgroundColor: C.surface, borderColor: C.line, padding: 14 }]}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 6 }}>
+        <View>
+          <Text style={{ color: C.faint, fontSize: 10.5, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' }}>
+            {idx == null ? 'Adjusted close · as-of' : dates[active]}
+          </Text>
+          <Text style={{ color: C.text, fontSize: 22, fontWeight: '800', letterSpacing: -0.4 }}>
+            ${price != null ? price.toFixed(2) : '—'}
+          </Text>
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={{ color: chg >= 0 ? C.gain : C.loss, fontSize: 17, fontWeight: '800' }}>{E.signPct(chg, 1)}</Text>
+          <Text style={{ color: C.faint, fontSize: 10.5 }}>vs window open</Text>
+        </View>
+      </View>
+
+      <View onLayout={(e) => setW(e.nativeEvent.layout.width)}
+        onStartShouldSetResponder={() => true} onMoveShouldSetResponder={() => true}
+        onResponderGrant={onTouch} onResponderMove={onTouch} onResponderRelease={() => setIdx(null)}>
+        {w > 0 ? (
+          <Svg width={w} height={H}>
+            <Defs>
+              <LinearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0" stopColor={col} stopOpacity="0.26" />
+                <Stop offset="1" stopColor={col} stopOpacity="0" />
+              </LinearGradient>
+            </Defs>
+            {winHi > winLo ? (
+              <Rect x={X(winLo)} y={padTop - 4} width={Math.max(1, X(winHi) - X(winLo))} height={H - padTop - padBot + 8}
+                fill={C.accentSoft} stroke={C.accent} strokeOpacity="0.35" strokeWidth="1" rx="3" />
+            ) : null}
+            <Path d={area} fill="url(#cg)" />
+            <Path d={line} stroke={col} strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" />
+            {idx != null ? (
+              <Line x1={X(active)} y1={padTop - 4} x2={X(active)} y2={H - padBot} stroke={C.text} strokeOpacity="0.4" strokeWidth="1" />
+            ) : null}
+            {idx != null ? (
+              <Circle cx={X(active)} cy={Y(price)} r="4.5" fill={col} stroke={C.surface} strokeWidth="2" />
+            ) : null}
+          </Svg>
+        ) : <View style={{ height: H }} />}
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
+        <View style={{ width: 12, height: 8, borderRadius: 2, backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.accent }} />
+        <Text style={{ color: C.faint, fontSize: 11 }}>Shaded = ranking window · touch & drag to inspect</Text>
+      </View>
+    </View>
   );
 }
 
@@ -495,7 +757,7 @@ function AppHeader({ C, snap }) {
   );
 }
 function Card({ C, children, pad = true }) {
-  return <View style={[styles.cardPanel, { backgroundColor: C.surface, borderColor: C.line, padding: pad ? 14 : 4, paddingHorizontal: pad ? 14 : 14 }]}>{children}</View>;
+  return <View style={[styles.cardPanel, { backgroundColor: C.surface, borderColor: C.line, padding: pad ? 14 : 4, paddingHorizontal: 14 }]}>{children}</View>;
 }
 function Eyebrow({ C, children }) {
   return <Text style={{ color: C.muted, fontSize: 10.5, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 8 }}>{children}</Text>;
@@ -509,7 +771,6 @@ function Stat({ C, v, l, color }) {
   );
 }
 function Segmented({ C, options, value, onChange }) {
-  // horizontal pill row — scales to any number of universes
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false}
       contentContainerStyle={{ gap: 8, paddingVertical: 2, paddingRight: 8 }}
@@ -576,12 +837,26 @@ function Empty({ C }) {
     </View>
   );
 }
-function Splash({ C }) {
+
+/* ---- skeleton shown during the brief initial state load ---- */
+function ScreenerSkeleton({ C, insets }) {
+  const a = useRef(new Animated.Value(0.4)).current;
+  useEffect(() => {
+    Animated.loop(Animated.sequence([
+      Animated.timing(a, { toValue: 1, duration: 700, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      Animated.timing(a, { toValue: 0.4, duration: 700, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+    ])).start();
+  }, []);
+  const Box = ({ h, w, mt, r }) => (
+    <Animated.View style={{ height: h, width: w || '100%', marginTop: mt || 0, borderRadius: r ?? 8, backgroundColor: C.surface2, opacity: a }} />
+  );
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: C.ground, alignItems: 'center', justifyContent: 'center' }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: C.ground, paddingHorizontal: 14 }} edges={['top', 'left', 'right']}>
       <StatusBar style="light" />
-      <ActivityIndicator color={C.accent} size="large" />
-      <Text style={{ color: C.muted, marginTop: 14, fontSize: 14 }}>Loading market snapshot…</Text>
+      <View style={{ paddingTop: 10 }}><Box h={26} w={'62%'} r={7} /><Box h={12} w={'80%'} mt={8} /></View>
+      <View style={{ marginTop: 16 }}><Box h={92} r={18} /></View>
+      <View style={{ marginTop: 12 }}><Box h={150} r={18} /></View>
+      {[0, 1, 2, 3, 4].map(i => <View key={i} style={{ marginTop: 8 }}><Box h={70} r={14} /></View>)}
     </SafeAreaView>
   );
 }
@@ -598,6 +873,7 @@ const styles = StyleSheet.create({
   cardPanel: { borderRadius: 20, borderWidth: 1, marginBottom: 12 },
   search: { borderWidth: 1, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 11, fontSize: 15, marginTop: 10 },
   countLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4, paddingBottom: 10, paddingTop: 2 },
+  miniBtn: { paddingHorizontal: 11, paddingVertical: 6, borderRadius: 16, borderWidth: 1 },
   card: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, borderWidth: 1, padding: 12, marginBottom: 8 },
   cardTap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, minWidth: 0 },
   rank: { width: 30, textAlign: 'center', fontSize: 13, fontWeight: '800' },
@@ -631,4 +907,12 @@ const styles = StyleSheet.create({
   tabbar: { flexDirection: 'row', borderTopWidth: 1, paddingTop: 8 },
   tabBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   badge: { position: 'absolute', top: -6, left: 14, minWidth: 17, height: 17, borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  sheetBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.45)' },
+  sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, padding: 18, paddingBottom: 34 },
+  sheetHandle: { alignSelf: 'center', width: 40, height: 5, borderRadius: 3, marginBottom: 12 },
+  sheetTitle: { fontSize: 18, fontWeight: '800', marginBottom: 8 },
+  sheetRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, borderTopWidth: 1 },
+  filterLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', marginTop: 16, marginBottom: 8 },
+  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 20, borderWidth: 1 },
 });
