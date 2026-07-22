@@ -33,20 +33,24 @@ Status: ✅ done · 🚧 in progress · ⬜ planned/candidate.
   **richer haptics & animations** (select-button pop, animated weight bars, tab/list fades)
 - ✅ 🟢 **Sort & filter the screener** — filter by market-cap band and exchange
 
-### V3 batch — ranking factors
-- ✅ 🟡 **Rank-by factor selector** — the chosen factor sets both the rank order and the
-  highlighted card number. Factors: **Sharpe momentum**, **12–1 raw momentum**,
-  **6–1 raw momentum**, **market-residual return** (return net of market beta),
-  window return, annualized vol (low-vol), market cap, A–Z. Tap to flip direction.
-  All factor math validated against the NumPy reference (222 checks).
-- ❌ Declined: composite multi-factor blend, Sortino, trend-vs-200d (prefer raw-return factors)
+### V3 batch — configurable score
+- ✅ 🟡 **Configurable ranking score** (replaced the earlier factor popup, which was reverted):
+  - Set the **return window** (as-of / start / end offsets) — unchanged from before.
+  - Rank by **Return**, **Volatility**, or **Sharpe** (return ÷ σ) — division by σ is optional.
+  - Separate **volatility window** with a *Match return window* toggle (default on).
+  - **Remove market influence** — residualizes both the return and the volatility against a
+    cap-weighted Top-500 market (β removed).
+  - Annualized throughout (mean·252, σ·√252). Default = 12–1 return ÷ 12–1 vol = the original
+    Sharpe momentum (verified identical). All configs validated vs NumPy (631 checks).
+- ❌ Reverted: the fixed 12–1 / 6–1 / residual "factor" popup (superseded by the configurable score)
+- ❌ Declined: composite multi-factor blend, Sortino, trend-vs-200d
 
 ---
 
 ## ⬜ Candidate — deeper ranking (the "rank" half)
-- ⬜ 🟢 Risk-free rate input (true Sharpe)
+- ⬜ 🟢 Risk-free rate input (true Sharpe numerator)
 - ⬜ 🟡 Sector-relative ranking (rank within sector)
-- ⬜ 🟡 Configurable momentum lookbacks (e.g. 3–1, 9–1) beyond the fixed 12–1 / 6–1
+- ⬜ 🟡 Weighted second score component — another window, or value / quality measures — blended in
 
 ## ⬜ Candidate — smarter weighting & risk (the "weight" half)
 - ⬜ 🟡 Compare weighting schemes (HRP vs equal / inverse-vol / min-variance)

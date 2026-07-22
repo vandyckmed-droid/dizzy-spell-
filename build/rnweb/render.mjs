@@ -9,16 +9,24 @@ p.on('console',m=>{if(m.type()==='error')errs.push('CONSOLE: '+m.text().slice(0,
 await p.goto('file://'+path.resolve('build/rnweb/index.html'),{waitUntil:'load'});
 await p.waitForTimeout(1400);
 const top=async()=>p.evaluate(()=>{const r=document.body.innerText.match(/\n1\n([A-Z]{1,5})/);return r?r[1]:'?';});
-console.log('default rank #1 ticker:', await top(), '| count:', await p.evaluate(()=>{const m=document.body.innerText.match(/\d+ ranked/);return m?m[0]:'?';}));
-// open Rank by sheet
-await p.getByText(/Sharpe ↓|Sharpe ↑/).first().click({timeout:3000}); await p.waitForTimeout(400);
-console.log('rank sheet:', await p.evaluate(()=>/Rank by/.test(document.body.innerText)?'opened':'no'));
-for(const f of ['12–1 raw momentum','6–1 raw momentum','Market-residual return']){
-  try{ await p.getByText(/Sharpe ↓|Sharpe ↑|12–1 ↓|6–1 ↓|Resid ↓/).first().click({timeout:1500}); await p.waitForTimeout(200);}catch(e){}
-  try{ await p.getByText(f,{exact:true}).click({timeout:2000}); await p.waitForTimeout(400);
-    console.log(f,'-> #1:', await top());
-  }catch(e){ console.log(f,'click err',e.message.slice(0,40)); }
-}
-await p.screenshot({path:path.join(out,'v4-factor.png')});
+const has=async(re)=>p.evaluate((s)=>new RegExp(s).test(document.body.innerText), re);
+console.log('score card present:', await has('Score'), '| Sharpe default #1:', await top());
+console.log('mode buttons:', await has('Return'), await has('Volatility'));
+console.log('remove-market row:', await has('Remove market influence'));
+// switch to Return mode
+try{ await p.getByText('Return',{exact:true}).first().click({timeout:2500}); await p.waitForTimeout(500);
+  console.log('Return mode #1:', await top()); }catch(e){console.log('return click',e.message.slice(0,40));}
+// switch to Volatility mode
+try{ await p.getByText('Volatility',{exact:true}).first().click({timeout:2500}); await p.waitForTimeout(500);
+  console.log('Vol mode #1 (lowest vol):', await top());
+  console.log('match-window toggle visible:', await has('Match return window')); }catch(e){console.log('vol click',e.message.slice(0,40));}
+// back to sharpe, toggle remove market
+try{ await p.getByText('Sharpe',{exact:true}).first().click({timeout:2500}); await p.waitForTimeout(400);
+  // toggle the remove-market switch (first Switch)
+  const sw=await p.$$('[role="switch"], input[type=checkbox]');
+  if(sw.length){ await sw[0].click(); await p.waitForTimeout(500); console.log('after remove-market, #1:', await top()); }
+  else console.log('no switch found (count',sw.length,')');
+}catch(e){console.log('resid',e.message.slice(0,40));}
+await p.screenshot({path:path.join(out,'v5-score.png')});
 console.log('ERRORS:', errs.length?[...new Set(errs)].slice(0,6):'NONE');
 await b.close();

@@ -30,13 +30,19 @@ function sharpeMomentum(closes, asof, start, end){
   return { sharpe, annRet, annVol, cum, n: r.length };
 }
 
-function rawReturn(closes, asof, startOff, endOff){
+function momentumDaily(closes, asof, startOff, endOff){
   const lo = asof - startOff, hi = asof - endOff;
   if (lo < 0 || hi >= closes.length || hi <= lo) return null;
-  return closes[hi] / closes[lo] - 1;
+  const seg = closes.slice(lo, hi + 1);
+  return { r: simpleReturns(seg), lo, hi, cum: seg[seg.length - 1] / seg[0] - 1 };
 }
 
-function residualScore(sret, mret){
+function annualizeStats(r){
+  if (!r || r.length < 2) return null;
+  return { annRet: mean(r) * TD, annVol: sampleStd(r) * Math.sqrt(TD) };
+}
+
+function residualize(sret, mret){
   const n = Math.min(sret.length, mret.length);
   if (n < 3) return null;
   let sm = 0, mm = 0;
@@ -45,9 +51,34 @@ function residualScore(sret, mret){
   let cov = 0, varm = 0;
   for (let i = 0; i < n; i++) { const dm = mret[i] - mm; cov += (sret[i] - sm) * dm; varm += dm * dm; }
   const beta = varm > 0 ? cov / varm : 0;
-  let resid = 0;
-  for (let i = 0; i < n; i++) resid += sret[i] - beta * mret[i];
-  return { beta, resid };
+  const e = new Array(n);
+  for (let i = 0; i < n; i++) e[i] = sret[i] - beta * mret[i];
+  return { e, beta };
+}
+
+function momentumScore(closes, market, asof, cfg){
+  const rw = momentumDaily(closes, asof, cfg.retStart, cfg.retEnd);
+  if (!rw) return null;
+  const vStart = cfg.matchVol ? cfg.retStart : cfg.volStart;
+  const vEnd = cfg.matchVol ? cfg.retEnd : cfg.volEnd;
+  const vw = momentumDaily(closes, asof, vStart, vEnd);
+  if (cfg.mode !== 'return' && !vw) return null;
+  let rRet = rw.r, vRet = vw ? vw.r : null, beta = null;
+  if (cfg.removeMkt) {
+    const rr = residualize(rw.r, market.slice(rw.lo, rw.hi));
+    if (!rr) return null;
+    rRet = rr.e; beta = rr.beta;
+    if (vw) { const vr = residualize(vw.r, market.slice(vw.lo, vw.hi)); if (!vr) return null; vRet = vr.e; }
+  }
+  const ra = annualizeStats(rRet);
+  if (!ra) return null;
+  const va = vw ? annualizeStats(vRet) : null;
+  const annRet = ra.annRet, annVol = va ? va.annVol : null;
+  let score;
+  if (cfg.mode === 'return') score = annRet;
+  else if (cfg.mode === 'vol') score = annVol;
+  else score = (annVol && annVol > 0) ? annRet / annVol : 0;
+  return { annRet, annVol, score, cum: rw.cum, beta };
 }
 
 function covMatrix(R){                       // R: T×N returns -> N×N sample cov
@@ -217,4 +248,4 @@ function fmtCap(x){ if(x>=1e12) return '$'+(x/1e12).toFixed(2)+'T'; if(x>=1e9) r
 
 function clsOf(x){ return x>=0?'gain':'loss'; }
 
-export { simpleReturns, mean, sampleStd, sharpeMomentum, rawReturn, residualScore, covMatrix, corrFromCov, quasiDiagOrder, clusterVar, recursiveBisection, hrpWeights, applyCaps, periodReturn, pct, signPct, fmtSharpe, fmtCap, clsOf, TD };
+export { simpleReturns, mean, sampleStd, sharpeMomentum, momentumDaily, annualizeStats, residualize, momentumScore, covMatrix, corrFromCov, quasiDiagOrder, clusterVar, recursiveBisection, hrpWeights, applyCaps, periodReturn, pct, signPct, fmtSharpe, fmtCap, clsOf, TD };

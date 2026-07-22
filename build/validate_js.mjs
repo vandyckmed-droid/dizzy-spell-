@@ -21,9 +21,9 @@ function grab(name){
   }
   return tpl.slice(start, i);
 }
-const NAMES = ['simpleReturns','mean','sampleStd','sharpeMomentum','rawReturn',
-  'residualScore','covMatrix','corrFromCov','quasiDiagOrder','clusterVar',
-  'recursiveBisection','hrpWeights','applyCaps','pct'];
+const NAMES = ['simpleReturns','mean','sampleStd','sharpeMomentum','momentumDaily',
+  'annualizeStats','residualize','momentumScore','covMatrix','corrFromCov',
+  'quasiDiagOrder','clusterVar','recursiveBisection','hrpWeights','applyCaps','pct'];
 const src = 'const TD=252;\n' + NAMES.map(grab).join('\n') +
   '\nexport {' + NAMES.join(',') + '};';
 fs.writeFileSync('build/_engine.mjs', src);
@@ -45,15 +45,7 @@ for (const [s, exp] of Object.entries(expected.sharpe)){
   chk(m && m.n === exp.n, `${s} n ${m&&m.n} vs ${exp.n}`);
 }
 
-// 1b) raw momentum factors (12-1, 6-1)
-for (const [s, exp] of Object.entries(expected.factors)){
-  const m12 = eng.rawReturn(BYSYM[s].closes, asof, 252, 21);
-  const m6 = eng.rawReturn(BYSYM[s].closes, asof, 126, 21);
-  chk(exp.mom12 == null ? m12 === null : close(m12, exp.mom12, 1e-10), `${s} mom12`);
-  chk(exp.mom6 == null ? m6 === null : close(m6, exp.mom6, 1e-10), `${s} mom6`);
-}
-
-// 1c) market-residual score (cap-weighted market proxy)
+// 1b) app-built cap-weighted market proxy must match the reference
 const pool = snap.tickers.filter(t => t.universes.includes('us_top500'));
 const totalCap = pool.reduce((a, t) => a + (t.marketCap || 0), 0) || 1;
 const mretAll = new Array(snap.dates.length - 1).fill(0);
@@ -61,16 +53,25 @@ for (const t of pool){
   const wgt = (t.marketCap || 0) / totalCap, c = t.closes;
   for (let k = 0; k < mretAll.length; k++) mretAll[k] += wgt * (c[k+1]/c[k] - 1);
 }
-{
-  const lo = asof - 252, hi = asof - 21;
-  for (const [s, exp] of Object.entries(expected.resid)){
-    if (exp == null) continue;
-    const c = BYSYM[s].closes;
-    const sret = []; for (let k = lo; k < hi; k++) sret.push(c[k+1]/c[k] - 1);
-    const rs = eng.residualScore(sret, mretAll.slice(lo, hi));
-    chk(rs && close(rs.beta, exp.beta, 1e-9), `${s} resid beta`);
-    chk(rs && close(rs.resid, exp.resid, 1e-9), `${s} resid score`);
+chk(mretAll.length === expected.market.length &&
+    mretAll.every((v, i) => close(v, expected.market[i], 1e-9)), 'market proxy matches reference');
+
+// 1c) configurable momentum score across configs
+for (const [name, cfg] of Object.entries(expected.configs)){
+  for (const [s, exp] of Object.entries(expected.scores[name])){
+    const r = eng.momentumScore(BYSYM[s].closes, mretAll, asof, cfg);
+    if (exp == null) { chk(r == null, `${name}/${s} expected null`); continue; }
+    chk(r && close(r.score, exp.score, 1e-9), `${name}/${s} score ${r&&r.score} vs ${exp.score}`);
+    chk(r && close(r.annRet, exp.annRet, 1e-9), `${name}/${s} annRet`);
+    chk(r && (exp.annVol == null ? r.annVol == null : close(r.annVol, exp.annVol, 1e-9)), `${name}/${s} annVol`);
+    chk(r && (exp.beta == null ? r.beta == null : close(r.beta, exp.beta, 1e-9)), `${name}/${s} beta`);
   }
+}
+// default sharpe config must equal the original sharpeMomentum
+for (const s of Object.keys(expected.scores.default).slice(0, 8)){
+  const sm = eng.sharpeMomentum(BYSYM[s].closes, asof, 252, 21);
+  const ms = eng.momentumScore(BYSYM[s].closes, mretAll, asof, expected.configs.default);
+  chk(sm && ms && close(sm.sharpe, ms.score, 1e-12), `${s} default score == sharpeMomentum`);
 }
 
 // 2) HRP weights on the exact selection Python used

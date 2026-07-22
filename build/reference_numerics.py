@@ -24,17 +24,24 @@ def window_slice(closes, as_of_idx, start_off, end_off):
     return closes[lo:hi + 1]
 
 
-def raw_return(closes, as_of_idx, start_off, end_off):
-    lo = as_of_idx - start_off
-    hi = as_of_idx - end_off
+def momentum_daily(closes, asof, start_off, end_off):
+    lo = asof - start_off
+    hi = asof - end_off
     if lo < 0 or hi >= len(closes) or hi <= lo:
         return None
-    return closes[hi] / closes[lo] - 1.0
+    seg = np.asarray(closes[lo:hi + 1], float)
+    r = seg[1:] / seg[:-1] - 1.0
+    return dict(r=r, lo=lo, hi=hi, cum=float(seg[-1] / seg[0] - 1.0))
 
 
-def residual_score(sret, mret):
-    """Market-residual return: sum of residuals after regressing stock daily
-    returns on market daily returns over the window. Returns (beta, resid)."""
+def annualize_stats(r):
+    if r is None or len(r) < 2:
+        return None
+    r = np.asarray(r, float)
+    return dict(annRet=float(r.mean() * TD), annVol=float(r.std(ddof=1) * np.sqrt(TD)))
+
+
+def residualize(sret, mret):
     s = np.asarray(sret, float)
     m = np.asarray(mret, float)
     n = min(len(s), len(m))
@@ -43,9 +50,43 @@ def residual_score(sret, mret):
     s, m = s[:n], m[:n]
     mm = m.mean()
     varm = ((m - mm) ** 2).sum()
-    beta = ((s - s.mean()) * (m - mm)).sum() / varm if varm > 0 else 0.0
-    resid = float((s - beta * m).sum())
-    return beta, resid
+    beta = float(((s - s.mean()) * (m - mm)).sum() / varm) if varm > 0 else 0.0
+    return dict(e=s - beta * m, beta=beta)
+
+
+def momentum_score(closes, market, asof, cfg):
+    rw = momentum_daily(closes, asof, cfg["retStart"], cfg["retEnd"])
+    if rw is None:
+        return None
+    v_start = cfg["retStart"] if cfg["matchVol"] else cfg["volStart"]
+    v_end = cfg["retEnd"] if cfg["matchVol"] else cfg["volEnd"]
+    vw = momentum_daily(closes, asof, v_start, v_end)
+    if cfg["mode"] != "return" and vw is None:
+        return None
+    r_ret, v_ret, beta = rw["r"], (vw["r"] if vw else None), None
+    if cfg["removeMkt"]:
+        rr = residualize(rw["r"], market[rw["lo"]:rw["hi"]])
+        if rr is None:
+            return None
+        r_ret, beta = rr["e"], rr["beta"]
+        if vw:
+            vr = residualize(vw["r"], market[vw["lo"]:vw["hi"]])
+            if vr is None:
+                return None
+            v_ret = vr["e"]
+    ra = annualize_stats(r_ret)
+    if ra is None:
+        return None
+    va = annualize_stats(v_ret) if vw is not None else None
+    ann_ret = ra["annRet"]
+    ann_vol = va["annVol"] if va else None
+    if cfg["mode"] == "return":
+        score = ann_ret
+    elif cfg["mode"] == "vol":
+        score = ann_vol
+    else:
+        score = ann_ret / ann_vol if (ann_vol and ann_vol > 0) else 0.0
+    return dict(annRet=ann_ret, annVol=ann_vol, score=score, cum=rw["cum"], beta=beta)
 
 
 def sharpe_momentum(closes, as_of_idx, start_off, end_off):

@@ -7,7 +7,7 @@
    ====================================================================== */
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
-  View, Text, ScrollView, FlatList, Pressable, TextInput, Modal, RefreshControl,
+  View, Text, ScrollView, FlatList, Pressable, TextInput, Modal, RefreshControl, Switch,
   StyleSheet, useColorScheme, Animated, Easing, LayoutAnimation, Platform, UIManager,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -52,24 +52,31 @@ const palettes = {
 const SECTOR_COLORS = ['#e8b24a','#2fb574','#5b9df0','#c86bd6','#f0894a','#54c7c7','#e0607e','#9aa7bd','#8bd450','#d64a4a','#6a7bd6'];
 const PERIODS = [['5-day',5],['10-day',10],['1-month',21],['3-month',63],['6-month',126],['1-year',252]];
 
-// Ranking factors — the chosen factor sets both the rank order and the
-// highlighted number on each card.
-const FACTORS = [
-  { key: 'sharpe', label: 'Sharpe momentum', short: 'Sharpe', better: 'high', num: true, signed: true, get: o => o.m.sharpe, fmt: v => E.fmtSharpe(v) },
-  { key: 'mom12', label: '12–1 raw momentum', short: '12–1', better: 'high', num: true, signed: true, get: o => o.m.mom12, fmt: v => v == null ? '—' : E.signPct(v, 0) },
-  { key: 'mom6', label: '6–1 raw momentum', short: '6–1', better: 'high', num: true, signed: true, get: o => o.m.mom6, fmt: v => v == null ? '—' : E.signPct(v, 0) },
-  { key: 'resid', label: 'Market-residual return', short: 'Resid', better: 'high', num: true, signed: true, get: o => o.m.resid, fmt: v => v == null ? '—' : E.signPct(v, 0) },
-  { key: 'cum', label: 'Window return', short: 'Return', better: 'high', num: true, signed: true, get: o => o.m.cum, fmt: v => E.signPct(v, 0) },
-  { key: 'annVol', label: 'Annualized volatility', short: 'Vol', better: 'low', num: true, signed: false, get: o => o.m.annVol, fmt: v => E.pct(v, 0) },
-  { key: 'marketCap', label: 'Market cap', short: 'Cap', better: 'high', num: true, signed: false, get: o => o.t.marketCap, fmt: v => E.fmtCap(v) },
-  { key: 'symbol', label: 'Ticker A–Z', short: 'A–Z', better: 'low', num: false, signed: false, get: o => o.t.symbol, fmt: () => '' },
+// Ranking modes. The score is: return (annualized), volatility (annualized), or
+// their ratio (Sharpe). Return/vol windows are configurable; market influence is
+// optionally residualized out.
+const MODES = [
+  { key: 'sharpe', label: 'Sharpe', short: 'Sharpe' },
+  { key: 'return', label: 'Return', short: 'Return' },
+  { key: 'vol', label: 'Volatility', short: 'Vol' },
 ];
-function factorCmp(fac, dir, a, b) {
-  if (!fac.num) return dir * String(fac.get(a)).localeCompare(String(fac.get(b)));
-  let av = fac.get(a), bv = fac.get(b);
-  const an = av == null || Number.isNaN(av), bn = bv == null || Number.isNaN(bv);
-  if (an && bn) return 0; if (an) return 1; if (bn) return -1;   // missing values sort last
-  return dir * (av - bv);
+function cfgOf(st) {
+  return {
+    retStart: st.start, retEnd: st.end,
+    volStart: st.volStart, volEnd: st.volEnd,
+    matchVol: st.matchVol, mode: st.mode, removeMkt: st.removeMkt,
+  };
+}
+function marketReturns(snap) {
+  const pool = snap.tickers.filter(t => t.universes.includes('us_top500'));
+  const totalCap = pool.reduce((a, t) => a + (t.marketCap || 0), 0) || 1;
+  const M = snap.dates.length - 1;
+  const mret = new Array(M).fill(0);
+  for (const t of pool) {
+    const wgt = (t.marketCap || 0) / totalCap, c = t.closes;
+    for (let k = 0; k < M; k++) mret[k] += wgt * (c[k + 1] / c[k] - 1);
+  }
+  return mret;
 }
 const CAP_BANDS = [
   { key: 'all', label: 'All caps', test: () => true },
@@ -109,6 +116,8 @@ function Root() {
   const [query, setQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const fade = useRef(new Animated.Value(0)).current;
+  // cap-weighted Top-500 daily market returns (for the residual option)
+  const market = useMemo(() => marketReturns(snap), [snap]);
 
   /* ---- load persisted UI state (selections + window + caps + sort/filter) ---- */
   useEffect(() => {
@@ -155,14 +164,14 @@ function Root() {
       <StatusBar style={scheme === 'light' ? 'dark' : 'light'} />
       <Animated.View style={{ flex: 1, opacity: fade }}>
         {tab === 'screener'
-          ? <Screener C={C} snap={snap} st={st} persist={persist} query={query} setQuery={setQuery}
+          ? <Screener C={C} snap={snap} market={market} st={st} persist={persist} query={query} setQuery={setQuery}
               onOpen={setDetail} refreshing={refreshing} onRefresh={onRefresh} />
           : <Portfolio C={C} snap={snap} st={st} persist={persist} onOpen={setDetail}
               refreshing={refreshing} onRefresh={onRefresh} />}
       </Animated.View>
       <TabBar C={C} tab={tab} setTab={setTab} count={st.selected.length} insets={insets} />
       <Modal visible={!!detail} animationType="slide" onRequestClose={() => setDetail(null)} presentationStyle="fullScreen">
-        {detail && <Detail C={C} snap={snap} st={st} sym={detail} onClose={() => setDetail(null)} onToggle={(s) => persist(toggleSel(st, s))} />}
+        {detail && <Detail C={C} snap={snap} market={market} st={st} sym={detail} onClose={() => setDetail(null)} onToggle={(s) => persist(toggleSel(st, s))} />}
       </Modal>
     </SafeAreaView>
   );
@@ -178,7 +187,11 @@ function normalizeState(saved) {
     selected: Array.isArray(saved.selected) ? saved.selected : [],
     maxStock: saved.maxStock ?? 0,
     maxSector: saved.maxSector ?? 0,
-    factor: saved.factor || saved.sortKey || 'sharpe',
+    mode: ['sharpe', 'return', 'vol'].includes(saved.mode) ? saved.mode : 'sharpe',
+    removeMkt: !!saved.removeMkt,
+    matchVol: saved.matchVol == null ? true : !!saved.matchVol,
+    volStart: saved.volStart ?? 252,
+    volEnd: saved.volEnd ?? 21,
     sortDir: saved.sortDir || 'desc',
     capBand: saved.capBand || 'all',
     exch: Array.isArray(saved.exch) ? saved.exch : [],
@@ -190,7 +203,9 @@ function clampState(s, snap) {
   const asof = s.asof == null ? N - 1 : Math.max(0, Math.min(N - 1, s.asof | 0));
   const start = Math.max(3, Math.min(N - 1, s.start | 0));
   const end = Math.max(1, Math.min(start - 2, s.end | 0));
-  return { ...s, universe: uni, asof, start, end };
+  const volStart = Math.max(3, Math.min(N - 1, s.volStart | 0));
+  const volEnd = Math.max(1, Math.min(volStart - 2, s.volEnd | 0));
+  return { ...s, universe: uni, asof, start, end, volStart, volEnd };
 }
 function toggleSel(st, sym) {
   const set = new Set(st.selected);
@@ -200,56 +215,34 @@ function toggleSel(st, sym) {
 }
 
 /* ====================== Screener ====================== */
-function Screener({ C, snap, st, persist, query, setQuery, onOpen, refreshing, onRefresh }) {
-  const [sortOpen, setSortOpen] = useState(false);
+function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refreshing, onRefresh }) {
   const [filterOpen, setFilterOpen] = useState(false);
   const pulse = useRef(new Animated.Value(1)).current;
-
-  // cap-weighted market daily returns over the whole history (Top-500 pool) — for the residual factor
-  const market = useMemo(() => {
-    const pool = snap.tickers.filter(t => t.universes.includes('us_top500'));
-    const totalCap = pool.reduce((a, t) => a + (t.marketCap || 0), 0) || 1;
-    const M = snap.dates.length - 1;
-    const mret = new Array(M).fill(0);
-    for (const t of pool) {
-      const wgt = (t.marketCap || 0) / totalCap, c = t.closes;
-      for (let k = 0; k < M; k++) mret[k] += wgt * (c[k + 1] / c[k] - 1);
-    }
-    return mret;
-  }, [snap]);
-
-  const fac = FACTORS.find(f => f.key === st.factor) || FACTORS[0];
   const dir = st.sortDir === 'asc' ? 1 : -1;
+  const cfg = cfgOf(st);
 
-  // compute per-ticker factor metrics, then rank by the active factor
+  // score every ticker with the configured window / mode / residual settings, then rank
   const ranked = useMemo(() => {
     const band = CAP_BANDS.find(b => b.key === st.capBand) || CAP_BANDS[0];
     const exchSet = st.exch && st.exch.length ? new Set(st.exch) : null;
-    const lo = st.asof - st.start, hi = st.asof - st.end;
-    const canWin = lo >= 0 && hi > lo && hi <= snap.dates.length - 1;
+    const c = cfgOf(st);
     const out = [];
     for (const t of snap.tickers) {
       if (!t.universes.includes(st.universe) || !band.test(t.marketCap || 0) || (exchSet && !exchSet.has(t.exchange))) continue;
-      const sm = E.sharpeMomentum(t.closes, st.asof, st.start, st.end);
-      if (!sm) continue;
-      let resid = null;
-      if (canWin) {
-        const c = t.closes; const sret = [];
-        for (let k = lo; k < hi; k++) sret.push(c[k + 1] / c[k] - 1);
-        const rs = E.residualScore(sret, market.slice(lo, hi));
-        resid = rs ? rs.resid : null;
-      }
-      out.push({ t, m: {
-        sharpe: sm.sharpe, cum: sm.cum, annVol: sm.annVol,
-        mom12: E.rawReturn(t.closes, st.asof, 252, 21),
-        mom6: E.rawReturn(t.closes, st.asof, 126, 21),
-        resid, marketCap: t.marketCap,
-      } });
+      const r = E.momentumScore(t.closes, market, st.asof, c);
+      if (!r || r.score == null || Number.isNaN(r.score)) continue;
+      out.push({ t, m: r });
     }
-    out.sort((a, b) => factorCmp(fac, dir, a, b));
+    out.sort((a, b) => {
+      const av = a.m.score, bv = b.m.score;
+      const an = av == null || Number.isNaN(av), bn = bv == null || Number.isNaN(bv);
+      if (an && bn) return 0; if (an) return 1; if (bn) return -1;
+      return dir * (av - bv);
+    });
     out.forEach((o, i) => (o.rank = i + 1));
     return out;
-  }, [snap, market, st.universe, st.asof, st.start, st.end, st.capBand, st.exch, st.factor, st.sortDir]);
+  }, [snap, market, st.universe, st.asof, st.start, st.end, st.volStart, st.volEnd,
+      st.matchVol, st.mode, st.removeMkt, st.capBand, st.exch, st.sortDir]);
 
   const q = query.trim().toUpperCase();
   const displayed = useMemo(() =>
@@ -257,7 +250,7 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen, refreshing, o
     [ranked, q]);
 
   const selSet = new Set(st.selected);
-  const sig = `${st.universe}|${st.factor}|${st.sortDir}|${st.capBand}|${st.exch.join(',')}`;
+  const sig = `${st.universe}|${st.mode}|${st.removeMkt}|${st.matchVol}|${st.sortDir}|${st.capBand}|${st.exch.join(',')}`;
   useEffect(() => {
     pulse.setValue(0.4);
     Animated.timing(pulse, { toValue: 1, duration: 260, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
@@ -268,16 +261,18 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen, refreshing, o
     next.start = Math.max(next.end + 2, Math.min(snap.dates.length - 1, next.start));
     next.end = Math.max(1, Math.min(next.start - 2, next.end));
     next.asof = Math.max(next.start, Math.min(snap.dates.length - 1, next.asof));
-    haptic('select');
-    persist(next);
+    haptic('select'); persist(next);
   };
-  const chooseFactor = (key) => {
-    haptic('select');
-    if (key === st.factor) persist({ ...st, sortDir: st.sortDir === 'desc' ? 'asc' : 'desc' });
-    else { const f = FACTORS.find(x => x.key === key); persist({ ...st, factor: key, sortDir: f && f.better === 'low' ? 'asc' : 'desc' }); }
+  const setVol = (patch) => {
+    let next = { ...st, ...patch };
+    next.volStart = Math.max(next.volEnd + 2, Math.min(snap.dates.length - 1, next.volStart));
+    next.volEnd = Math.max(1, Math.min(next.volStart - 2, next.volEnd));
+    haptic('select'); persist(next);
   };
+  const setMode = (m) => { animateNext(); haptic('select'); persist({ ...st, mode: m, sortDir: m === 'vol' ? 'asc' : 'desc' }); };
   const setFilter = (patch) => { animateNext(); haptic('select'); persist({ ...st, ...patch }); };
   const activeFilters = (st.capBand !== 'all' ? 1 : 0) + (st.exch.length ? 1 : 0);
+  const modeLabel = (MODES.find(m => m.key === st.mode) || MODES[0]).short;
 
   const header = (
     <View>
@@ -296,7 +291,7 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen, refreshing, o
       </Card>
 
       <Card C={C}>
-        <Eyebrow C={C}>Ranking window · trading days</Eyebrow>
+        <Eyebrow C={C}>Return window · trading days</Eyebrow>
         <Stepper C={C} label="As-of date" sub={snap.dates[st.asof]}
           value={snap.dates[st.asof].slice(5)}
           onDec={() => st.asof > st.start && setWin({ asof: st.asof - 1 })}
@@ -306,6 +301,27 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen, refreshing, o
         <Stepper C={C} label="End offset" sub="days ago window closes (skip)" value={String(st.end)}
           onDec={() => setWin({ end: st.end - 1 })} onInc={() => setWin({ end: st.end + 1 })} border />
         <WindowNote C={C} snap={snap} st={st} />
+      </Card>
+
+      <Card C={C}>
+        <Eyebrow C={C}>Score</Eyebrow>
+        <Text style={{ color: C.muted, fontSize: 12.5, marginBottom: 8 }}>Rank by</Text>
+        <ModeSeg C={C} value={st.mode} onChange={setMode} />
+        <ToggleRow C={C} label="Remove market influence" sub="rank on residual (market-neutral) return"
+          value={st.removeMkt} onChange={(v) => { animateNext(); haptic('select'); persist({ ...st, removeMkt: v }); }} />
+        {st.mode !== 'return' ? (
+          <ToggleRow C={C} border label="Match return window" sub="use the return window for volatility"
+            value={st.matchVol} onChange={(v) => { animateNext(); haptic('select'); persist({ ...st, matchVol: v }); }} />
+        ) : null}
+        {st.mode !== 'return' && !st.matchVol ? (
+          <>
+            <Stepper C={C} border label="Vol start offset" sub="σ window opens" value={String(st.volStart)}
+              onDec={() => setVol({ volStart: st.volStart - 1 })} onInc={() => setVol({ volStart: st.volStart + 1 })} />
+            <Stepper C={C} border label="Vol end offset" sub="σ window closes" value={String(st.volEnd)}
+              onDec={() => setVol({ volEnd: st.volEnd - 1 })} onInc={() => setVol({ volEnd: st.volEnd + 1 })} />
+          </>
+        ) : null}
+        <ScoreNote C={C} snap={snap} st={st} />
       </Card>
 
       <View style={styles.countLine}>
@@ -319,10 +335,11 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen, refreshing, o
               ⚑ Filter{activeFilters ? ` · ${activeFilters}` : ''}
             </Text>
           </Pressable>
-          <Pressable onPress={() => setSortOpen(true)} accessibilityLabel="Rank by"
+          <Pressable accessibilityLabel="Flip direction"
+            onPress={() => { haptic('select'); persist({ ...st, sortDir: st.sortDir === 'desc' ? 'asc' : 'desc' }); }}
             style={[styles.miniBtn, { backgroundColor: C.surface2, borderColor: C.line }]}>
             <Text style={{ color: C.text, fontSize: 12, fontWeight: '700' }}>
-              {fac.short} {st.sortDir === 'desc' ? '↓' : '↑'}
+              {modeLabel}{st.removeMkt ? '·resid' : ''} {st.sortDir === 'desc' ? '↓' : '↑'}
             </Text>
           </Pressable>
         </View>
@@ -342,34 +359,32 @@ function Screener({ C, snap, st, persist, query, setQuery, onOpen, refreshing, o
         initialNumToRender={14} maxToRenderPerBatch={16} windowSize={10} removeClippedSubviews
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} />}
         renderItem={({ item }) => (
-          <RankCard C={C} o={item} fac={fac} selected={selSet.has(item.t.symbol)}
+          <RankCard C={C} o={item} mode={st.mode} removeMkt={st.removeMkt} selected={selSet.has(item.t.symbol)}
             onOpen={() => onOpen(item.t.symbol)}
             onToggle={() => persist(toggleSel(st, item.t.symbol))} />
         )} />
 
-      <RankSheet C={C} visible={sortOpen} onClose={() => setSortOpen(false)}
-        factor={st.factor} sortDir={st.sortDir}
-        onChoose={(k) => { const diff = k !== st.factor; chooseFactor(k); if (diff) setSortOpen(false); }} />
       <FilterSheet C={C} visible={filterOpen} onClose={() => setFilterOpen(false)}
         st={st} setFilter={setFilter} />
     </Animated.View>
   );
 }
 
-function RankCard({ C, o, fac, selected, onOpen, onToggle }) {
+function RankCard({ C, o, mode, removeMkt, selected, onOpen, onToggle }) {
   const { t, m, rank } = o;
-  // big number = the active ranking factor's value; sub-line = context metrics
+  const vol = m.annVol != null ? E.pct(m.annVol, 0) : '—';
+  const rp = (removeMkt ? 'α ' : '');   // α = residual (market-neutral) return
+  // big number = the score under the active mode; sub-line = context metrics
   let big, bigColor, sub;
-  if (fac.key === 'symbol') {
-    big = E.fmtSharpe(m.sharpe); bigColor = m.sharpe >= 0 ? C.gain : C.loss;
-    sub = `${E.signPct(m.cum)} · σ ${E.pct(m.annVol, 0)}`;
+  if (mode === 'return') {
+    big = E.signPct(m.annRet, 0); bigColor = m.annRet >= 0 ? C.gain : C.loss;
+    sub = `σ ${vol} · ${rp}${E.signPct(m.cum, 0)} cum`;
+  } else if (mode === 'vol') {
+    big = vol; bigColor = C.text;
+    sub = `${rp}${E.signPct(m.annRet, 0)} ann. ret`;
   } else {
-    const v = fac.get(o);
-    big = fac.fmt(v);
-    bigColor = v == null ? C.faint : (fac.signed ? (v >= 0 ? C.gain : C.loss) : C.text);
-    sub = (fac.key === 'cum' || fac.key === 'annVol')
-      ? `Sharpe ${E.fmtSharpe(m.sharpe)}`
-      : `${E.signPct(m.cum)} · σ ${E.pct(m.annVol, 0)}`;
+    big = E.fmtSharpe(m.score); bigColor = m.score >= 0 ? C.gain : C.loss;
+    sub = `${rp}${E.signPct(m.annRet, 0)} · σ ${vol}`;
   }
   const scale = useRef(new Animated.Value(1)).current;
   const onSel = () => {
@@ -410,7 +425,7 @@ function WindowNote({ C, snap, st }) {
   let msg, warn = false;
   if (lo < 0) { warn = true; msg = `⚠︎ Not enough history: window opens ${-lo} day(s) before the earliest date. Reduce start offset or move as-of later.`; }
   else if (st.start <= st.end) { warn = true; msg = `⚠︎ Start offset must exceed end offset (${st.start} ≤ ${st.end}).`; }
-  else msg = `Window ${snap.dates[lo]} → ${snap.dates[hi]} · ${hi - lo} daily returns · zero risk-free, sample σ, ×252 annualization.`;
+  else msg = `Window ${snap.dates[lo]} → ${snap.dates[hi]} · ${hi - lo} daily returns.`;
   return <Text style={{ color: warn ? C.loss : C.faint, fontSize: 11.5, marginTop: 8, lineHeight: 16 }}>{msg}</Text>;
 }
 
@@ -426,23 +441,46 @@ function Sheet({ C, visible, onClose, children }) {
     </Modal>
   );
 }
-function RankSheet({ C, visible, onClose, factor, sortDir, onChoose }) {
+// 3-way equal-width segmented control (Return / Volatility / Sharpe)
+function ModeSeg({ C, value, onChange }) {
   return (
-    <Sheet C={C} visible={visible} onClose={onClose}>
-      <Text style={[styles.sheetTitle, { color: C.text }]}>Rank by</Text>
-      {FACTORS.map(s => {
-        const on = s.key === factor;
+    <View style={[styles.modeSeg, { backgroundColor: C.surface2, borderColor: C.line }]}>
+      {MODES.map(m => {
+        const on = m.key === value;
         return (
-          <Pressable key={s.key} onPress={() => onChoose(s.key)}
-            style={[styles.sheetRow, { borderTopColor: C.line }]}>
-            <Text style={{ color: on ? C.accent : C.text, fontSize: 16, fontWeight: on ? '700' : '500' }}>{s.label}</Text>
-            {on ? <Text style={{ color: C.accent, fontSize: 16, fontWeight: '800' }}>{sortDir === 'desc' ? '↓ High→Low' : '↑ Low→High'}</Text> : null}
+          <Pressable key={m.key} onPress={() => onChange(m.key)} accessibilityRole="button"
+            accessibilityState={{ selected: on }}
+            style={[styles.modeBtn, on && { backgroundColor: C.accent }]}>
+            <Text style={{ color: on ? C.accentInk : C.muted, fontSize: 13.5, fontWeight: '700' }}>{m.label}</Text>
           </Pressable>
         );
       })}
-      <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 10 }}>Ranks and the highlighted number update to the chosen factor. 12–1 and 6–1 are fixed-lookback raw returns (skip the last month); residual return strips out market beta. Tap the active factor to flip direction.</Text>
-    </Sheet>
+    </View>
   );
+}
+function ToggleRow({ C, label, sub, value, onChange, border }) {
+  return (
+    <View style={[styles.ctlRow, border && { borderTopColor: C.line, borderTopWidth: 1 }]}>
+      <View style={{ flex: 1, paddingRight: 10 }}>
+        <Text style={{ color: C.text, fontSize: 13.5 }}>{label}</Text>
+        {sub ? <Text style={{ color: C.faint, fontSize: 11, marginTop: 1 }}>{sub}</Text> : null}
+      </View>
+      <Switch value={value} onValueChange={onChange}
+        trackColor={{ false: C.surface2, true: C.accent }}
+        thumbColor="#fff" ios_backgroundColor={C.surface2} />
+    </View>
+  );
+}
+// explains the current scoring formula
+function ScoreNote({ C, snap, st }) {
+  const vStart = st.matchVol ? st.start : st.volStart;
+  const vEnd = st.matchVol ? st.end : st.volEnd;
+  let base;
+  if (st.mode === 'return') base = `Annualized return over the return window (mean daily × 252).`;
+  else if (st.mode === 'vol') base = `Annualized volatility (sample σ × √252) over the ${vStart}→${vEnd} window.`;
+  else base = `Sharpe = annualized return (${st.start}→${st.end}) ÷ annualized σ (${vStart}→${vEnd}), rf = 0.`;
+  const resid = st.removeMkt ? ` Returns are residualized against the cap-weighted Top-500 (market β removed).` : '';
+  return <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 10, lineHeight: 16 }}>{base}{resid}</Text>;
 }
 function FilterSheet({ C, visible, onClose, st, setFilter }) {
   const toggleExch = (ex) => {
@@ -628,13 +666,16 @@ function computePortfolio(snap, BYSYM, st) {
 }
 
 /* ====================== Ticker detail ====================== */
-function Detail({ C, snap, st, sym, onClose, onToggle }) {
+function Detail({ C, snap, market, st, sym, onClose, onToggle }) {
   const t = snap.tickers.find(x => x.symbol === sym);
   const insets = useSafeAreaInsets();
   const [inPf, setInPf] = useState(st.selected.includes(sym));
   if (!t) return null;
-  const m = E.sharpeMomentum(t.closes, st.asof, st.start, st.end);
+  const m = E.momentumScore(t.closes, market, st.asof, cfgOf(st));
   const asofDate = snap.dates[st.asof];
+  const scoreLabel = (st.mode === 'return' ? 'Ann. return' : st.mode === 'vol' ? 'Volatility' : 'Sharpe') + (st.removeMkt ? ' (α)' : '');
+  const scoreShow = m == null ? '—' : (st.mode === 'sharpe' ? E.fmtSharpe(m.score) : st.mode === 'vol' ? E.pct(m.annVol, 0) : E.signPct(m.annRet, 0));
+  const scoreColor = m == null ? C.text : (st.mode === 'vol' ? C.text : ((st.mode === 'sharpe' ? m.score : m.annRet) >= 0 ? C.gain : C.loss));
 
   return (
     <View style={{ flex: 1, backgroundColor: C.ground, paddingTop: insets.top }}>
@@ -655,9 +696,9 @@ function Detail({ C, snap, st, sym, onClose, onToggle }) {
         </View>
 
         <View style={styles.dstat}>
-          <Stat C={C} v={m ? E.fmtSharpe(m.sharpe) : '—'} l="Sharpe mom." color={m ? (m.sharpe >= 0 ? C.gain : C.loss) : C.text} />
+          <Stat C={C} v={scoreShow} l={scoreLabel} color={scoreColor} />
           <Stat C={C} v={m ? E.signPct(m.cum, 0) : '—'} l="Window ret." color={m ? (m.cum >= 0 ? C.gain : C.loss) : C.text} />
-          <Stat C={C} v={m ? E.pct(m.annVol, 0) : '—'} l="Ann. vol" />
+          <Stat C={C} v={m && m.annVol != null ? E.pct(m.annVol, 0) : '—'} l="Ann. vol" />
         </View>
 
         <View style={{ marginHorizontal: 16, marginBottom: 14 }}>
@@ -934,6 +975,8 @@ const styles = StyleSheet.create({
   stepper: { flexDirection: 'row', alignItems: 'center', borderRadius: 10, borderWidth: 1 },
   stepBtn: { width: 40, height: 34, alignItems: 'center', justifyContent: 'center' },
   pill: { paddingHorizontal: 15, paddingVertical: 9, borderRadius: 20, borderWidth: 1 },
+  modeSeg: { flexDirection: 'row', borderRadius: 12, borderWidth: 1, padding: 3, gap: 3 },
+  modeBtn: { flex: 1, paddingVertical: 9, borderRadius: 9, alignItems: 'center' },
   warn: { borderRadius: 14, borderWidth: 1, padding: 12, marginBottom: 12 },
   sectorBar: { flexDirection: 'row', height: 26, borderRadius: 8, overflow: 'hidden', borderWidth: 1, marginTop: 8, marginBottom: 6 },
   legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
