@@ -97,7 +97,7 @@ const CAP_BANDS = [
 ];
 const EXCHANGES = ['NYSE', 'NASDAQ', 'AMEX'];
 
-const shortDate = (iso) => { const [y, m, d] = iso.split('-'); return `${+m}/${+d}/${y.slice(2)}`; };
+const shortDate = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${+m}/${+d}/${y.slice(2)}`; };
 
 const haptic = (kind = 'select') => {
   try {
@@ -1023,7 +1023,8 @@ function emaSeries(vals, period) {
 // left edge; the 1D view is the latest intraday session, based off prior close.
 function macroView(ser, tf) {
   if (tf === '1D') {
-    const it = ser.intraday, t = it.t, n = t.length;
+    const it = ser.intraday, t = (it && it.t) || [], n = t.length;
+    if (!n) return { isIntraday: true, from: 0, fullC: null, labels: [], o: [], h: [], l: [], c: [], baseline: 0 };
     const day = t[n - 1].slice(0, 10);
     let s = n - 1;
     while (s > 0 && t[s - 1].slice(0, 10) === day) s--;
@@ -1040,7 +1041,7 @@ function macroView(ser, tf) {
     labels: sl(dl.d), o: sl(dl.o), h: sl(dl.h), l: sl(dl.l), c, baseline: c[0] };
 }
 
-const fmtLabel = (s, intraday) => intraday ? s.slice(11, 16) : shortDate(s);
+const fmtLabel = (s, intraday) => !s ? '' : (intraday ? s.slice(11, 16) : shortDate(s));
 
 function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P }) {
   const [w, setW] = useState(0);
@@ -1049,6 +1050,9 @@ function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P }) {
   const v = useMemo(() => macroView(ser, tf), [ser, tf]);
   const n = v.c.length;
   const daily = !v.isIntraday;
+  // drop any scrub position when the view (symbol/timeframe) changes — a stale
+  // index from a longer series would otherwise overrun a shorter one's arrays
+  useEffect(() => { setIdx(null); }, [ser, tf]);
   const ema1 = useMemo(() => (daily && ema1On && v.fullC) ? emaSeries(v.fullC, ema1P).slice(v.from) : null, [daily, ema1On, ema1P, v]);
   const ema2 = useMemo(() => (daily && ema2On && v.fullC) ? emaSeries(v.fullC, ema2P).slice(v.from) : null, [daily, ema2On, ema2P, v]);
 
@@ -1064,7 +1068,7 @@ function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P }) {
   const X = (i) => padX + (n <= 1 ? 0 : (i / (n - 1)) * (w - 2 * padX));
   const Y = (val) => padTop + (1 - (val - lo) / rng) * (H - padTop - padBot);
 
-  const active = idx == null ? n - 1 : idx;
+  const active = Math.max(0, Math.min(n - 1, idx == null ? n - 1 : idx));
   const price = v.c[active];
   const last = v.c[n - 1];
   const chg = price / v.baseline - 1;
@@ -1191,7 +1195,9 @@ function SegBar({ C, options, value, onChange }) {
 
 // today's session change + closes for a macro symbol
 function macroDay(ser) {
-  const it = ser.intraday, n = it.t.length, day = it.t[n - 1].slice(0, 10);
+  const it = ser.intraday, n = (it && it.t) ? it.t.length : 0;
+  if (!n) return { last: null, chg: 0, closes: [] };
+  const day = it.t[n - 1].slice(0, 10);
   let s = n - 1;
   while (s > 0 && it.t[s - 1].slice(0, 10) === day) s--;
   const dd = ser.daily.d; let prev = null;
