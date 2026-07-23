@@ -51,6 +51,11 @@ Status: ✅ done · 🚧 in progress · ⬜ planned/candidate.
 - ✅ 🟢 Ticker detail rebalanced — taller price chart, more compact performance card
 - ✅ 🟡 **Most-correlated peers** on the ticker detail — top 3 by daily-return correlation
   (latest 252d), tappable to navigate (e.g. NVDA → TSM/AVGO/VRT, JPM → BAC/WFC/C)
+- ✅ 🟢 Performance card inset to match the other detail cards
+- ✅ 🟢 **Company logo** in the ticker-detail header (FMP public image CDN; initials fallback)
+- ✅ 🟢 **Tappable sector tag** — jumps to that sector's universe on the Screener
+- ⬜ 🟡 Tappable **industry** tag → industry-filtered list (needs a new industry filter)
+- ⬜ 🟢 Logos in the rank list rows (lazy-loaded) — optional follow-up
 - ⬜ 🟡 Ticker-detail tabs — split into sub-tabs as more per-name info is added (deferred until the view grows)
 
 ---

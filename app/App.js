@@ -7,7 +7,7 @@
    ====================================================================== */
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
-  View, Text, ScrollView, FlatList, Pressable, TextInput, Modal, RefreshControl, Switch, Alert,
+  View, Text, ScrollView, FlatList, Pressable, TextInput, Modal, RefreshControl, Switch, Alert, Image,
   StyleSheet, useColorScheme, Animated, Easing, LayoutAnimation, Platform, UIManager,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -171,7 +171,9 @@ function Root() {
       </Animated.View>
       <TabBar C={C} tab={tab} setTab={setTab} count={st.selected.length} insets={insets} />
       <Modal visible={!!detail} animationType="slide" onRequestClose={() => setDetail(null)} presentationStyle="fullScreen">
-        {detail && <Detail C={C} snap={snap} market={market} st={st} sym={detail} onClose={() => setDetail(null)} onToggle={(s) => persist(toggleSel(st, s))} onOpen={setDetail} />}
+        {detail && <Detail C={C} snap={snap} market={market} st={st} sym={detail}
+          onClose={() => setDetail(null)} onToggle={(s) => persist(toggleSel(st, s))} onOpen={setDetail}
+          onSector={(uid) => { animateNext(); persist({ ...st, universe: uid }); setDetail(null); setTab('screener'); }} />}
       </Modal>
     </SafeAreaView>
   );
@@ -681,7 +683,7 @@ function computePortfolio(snap, BYSYM, st) {
 }
 
 /* ====================== Ticker detail ====================== */
-function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen }) {
+function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen, onSector }) {
   const t = snap.tickers.find(x => x.symbol === sym);
   const insets = useSafeAreaInsets();
   const peers = useMemo(() =>
@@ -689,6 +691,8 @@ function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen }) {
     [snap, t, st.asof]);
   if (!t) return null;
   const inPf = st.selected.includes(sym);
+  // sector tag jumps to that sector's universe if one exists
+  const sectorUni = Object.entries(snap.universes).find(([, u]) => u.label === t.sector);
   const m = E.momentumScore(t.closes, market, st.asof, cfgOf(st));
   const asofDate = snap.dates[st.asof];
   const scoreLabel = (st.mode === 'return' ? 'Ann. return' : st.mode === 'vol' ? 'Volatility' : 'Sharpe') + (st.removeMkt ? ' (α)' : '');
@@ -704,10 +708,22 @@ function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen }) {
       </View>
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 28 }}>
         <View style={{ padding: 18, paddingBottom: 6 }}>
-          <Text style={{ color: C.text, fontSize: 32, fontWeight: '800', letterSpacing: -0.5 }}>{t.symbol}</Text>
-          <Text style={{ color: C.muted, fontSize: 15, marginTop: 2 }}>{t.name}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <TickerLogo C={C} symbol={t.symbol} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={{ color: C.text, fontSize: 30, fontWeight: '800', letterSpacing: -0.5 }}>{t.symbol}</Text>
+              <Text numberOfLines={1} style={{ color: C.muted, fontSize: 15, marginTop: 1 }}>{t.name}</Text>
+            </View>
+          </View>
           <View style={styles.tags}>
-            {[t.sector, t.industry, t.exchange, E.fmtCap(t.marketCap)].map((x, i) => (
+            {sectorUni ? (
+              <Pressable onPress={() => { haptic('select'); onSector(sectorUni[0]); }} accessibilityLabel={`See ${t.sector} names`}>
+                <Text style={[styles.tag, { backgroundColor: C.accentSoft, borderColor: C.accent, color: C.accent }]}>{t.sector} ›</Text>
+              </Pressable>
+            ) : (
+              <Text style={[styles.tag, { backgroundColor: C.surface2, borderColor: C.line, color: C.muted }]}>{t.sector}</Text>
+            )}
+            {[t.industry, t.exchange, E.fmtCap(t.marketCap)].map((x, i) => (
               <Text key={i} style={[styles.tag, { backgroundColor: C.surface2, borderColor: C.line, color: C.muted }]}>{x}</Text>
             ))}
           </View>
@@ -994,6 +1010,26 @@ function makeColorFor() {
     if (!(sec in map)) map[sec] = SECTOR_COLORS[Object.keys(map).length % SECTOR_COLORS.length];
     return map[sec];
   };
+}
+
+// Company logo from FMP's public image CDN (no key). Falls back to a ticker-
+// initials tile if the image is missing or offline.
+function TickerLogo({ C, symbol, size = 46 }) {
+  const [failed, setFailed] = useState(false);
+  const box = { width: size, height: size, borderRadius: 12, borderWidth: 1, borderColor: C.line };
+  if (failed) {
+    return (
+      <View style={[box, { backgroundColor: C.surface2, alignItems: 'center', justifyContent: 'center' }]}>
+        <Text style={{ color: C.muted, fontWeight: '800', fontSize: size * 0.32 }}>{symbol.slice(0, 2)}</Text>
+      </View>
+    );
+  }
+  return (
+    <Image
+      source={{ uri: `https://images.financialmodelingprep.com/symbol/${symbol}.png` }}
+      onError={() => setFailed(true)} resizeMode="contain"
+      style={[box, { backgroundColor: '#fff' }]} />
+  );
 }
 
 // Top-k names by daily-return correlation with `target` over the latest 252 days.
