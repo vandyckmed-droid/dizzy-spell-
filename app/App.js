@@ -42,6 +42,7 @@ const palettes = {
     gain: '#00C805', loss: '#FF5000',
     gainSoft: 'rgba(0,200,5,0.14)', lossSoft: 'rgba(255,80,0,0.14)',
     div: '#3DD6C0', divSoft: 'rgba(61,214,192,0.16)',
+    red: '#FF5F73', redSoft: 'rgba(255,95,115,0.16)',   // redundant cue — complement of the teal diversifier
     selRow: '#0C1A0E',
   },
   light: {
@@ -52,6 +53,7 @@ const palettes = {
     gain: '#00A804', loss: '#E63A00',
     gainSoft: 'rgba(0,168,4,0.12)', lossSoft: 'rgba(230,58,0,0.12)',
     div: '#0E9E8C', divSoft: 'rgba(14,158,140,0.12)',
+    red: '#E23B54', redSoft: 'rgba(226,59,84,0.12)',   // redundant cue — complement of the teal diversifier
     selRow: '#EAF7EC',
   },
 };
@@ -308,6 +310,7 @@ function normalizeState(saved) {
     maxSector: saved.maxSector ?? 0,
     minStock: saved.minStock ?? 0,
     weightScheme: ['hrp', 'equal', 'invvol', 'minvar'].includes(saved.weightScheme) ? saved.weightScheme : 'hrp',
+    scoreNorm: !!saved.scoreNorm,       // show the score as a 0–100 rank of the universe
     mode: ['sharpe', 'return', 'vol'].includes(saved.mode) ? saved.mode : 'sharpe',
     removeMkt: !!saved.removeMkt,
     matchVol: saved.matchVol == null ? true : !!saved.matchVol,
@@ -412,6 +415,18 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
   const displayed = useMemo(() =>
     q ? ranked.filter(o => o.t.symbol.includes(q) || o.t.name.toUpperCase().includes(q)) : ranked,
     [ranked, q]);
+
+  // 0–100 normalization: min/max of the ranked score across the whole universe
+  // (post-filter, pre-search), so 100 = the top score, 0 = the bottom.
+  const scoreExtent = useMemo(() => {
+    let mn = Infinity, mx = -Infinity;
+    for (const o of ranked) {
+      const s = o.score;
+      if (s != null && !Number.isNaN(s)) { if (s < mn) mn = s; if (s > mx) mx = s; }
+    }
+    return mx >= mn ? { mn, mx } : null;
+  }, [ranked]);
+  const norm = st.scoreNorm ? scoreExtent : null;
 
   const selSet = new Set(st.selected);
   const selInView = ranked.reduce((n, o) => n + (selSet.has(o.t.symbol) ? 1 : 0), 0);
@@ -521,6 +536,8 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
               onDec={() => setVol({ volEnd: st.volEnd - 1 })} onInc={() => setVol({ volEnd: st.volEnd + 1 })} />
           </>
         ) : null}
+        <ToggleRow C={C} border label="Normalized 0–100 score" sub="100 = top of the universe, 0 = bottom"
+          value={st.scoreNorm} onChange={(v) => { animateNext(); haptic('select'); persist({ ...st, scoreNorm: v }); }} />
         <ScoreNote C={C} snap={snap} st={st} />
       </Card>
 
@@ -578,10 +595,15 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
       {st.selected.length ? (
         <Pressable onPress={() => setCueOpen(true)} accessibilityLabel="Basket cue settings"
           style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 6, paddingBottom: 8 }}>
-          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: st.cueOn ? C.div : C.faint }} />
+          {st.cueOn ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: C.div }} />
+              <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: C.red }} />
+            </View>
+          ) : <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: C.faint }} />}
           <Text style={{ color: C.faint, fontSize: 11 }}>
             {st.cueOn
-              ? `diversifies < ${st.divRho.toFixed(2)} · faded ≈ held ≥ ${st.redRho.toFixed(2)} ρ`
+              ? `diversifies < ${st.divRho.toFixed(2)} · redundant ≥ ${st.redRho.toFixed(2)} ρ`
               : 'basket cue off'}
           </Text>
           <Text style={{ color: C.accent, fontSize: 11, fontWeight: '700' }}>· adjust</Text>
@@ -607,7 +629,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
           <RankCard C={C} o={item} mode={st.mode} removeMkt={st.removeMkt} selected={selSet.has(item.t.symbol)}
             corr={selSet.has(item.t.symbol) ? null : corrMap.get(item.t.symbol)}
             active={st.selected.length > 0 && st.cueOn} divRho={st.divRho} redRho={st.redRho}
-            dual={{ on: st.winB }}
+            dual={{ on: st.winB }} norm={norm}
             onOpen={() => onOpen(item.t.symbol)}
             onToggle={() => persist(toggleSel(st, item.t.symbol))} />
         )} />
@@ -670,7 +692,7 @@ function metricStr(v, mode) {
 }
 const metricColor = (v, mode, C) => mode === 'vol' ? C.text : (v >= 0 ? C.gain : C.loss);
 
-function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRho, dual, onOpen, onToggle }) {
+function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRho, dual, norm, onOpen, onToggle }) {
   const { t, m, rank } = o;
   const cue = rankCue(corr, active, divRho, redRho);
   const vol = m.annVol != null ? E.pct(m.annVol, 0) : '—';
@@ -689,9 +711,19 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
     onToggle();
   };
 
-  // right column: one blended score (window B on), or a single score + context
+  // right column: 0–100 normalized score (if enabled), one blended score (window B
+  // on), or a single score + context
   let right;
-  if (dual && dual.on) {
+  if (norm) {
+    const has = o.score != null && !Number.isNaN(o.score);
+    const n100 = has && norm.mx > norm.mn ? Math.round(100 * (o.score - norm.mn) / (norm.mx - norm.mn)) : (has ? 100 : null);
+    right = (
+      <View style={{ alignItems: 'flex-end', minWidth: 84 }}>
+        <Text style={[styles.big, { color: C.text }]}>{n100 == null ? '—' : n100}</Text>
+        <Text style={[styles.metricSub, { color: C.faint }]}>{has ? `${metricStr(o.score, mode)}${dual && dual.on ? ' blend' : ''}` : '/ 100'}</Text>
+      </View>
+    );
+  } else if (dual && dual.on) {
     right = (
       <View style={{ alignItems: 'flex-end', minWidth: 84 }}>
         <Text style={[styles.big, { color: metricColor(o.score, mode, C) }]}>{metricStr(o.score, mode)}</Text>
@@ -718,11 +750,12 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Text style={[styles.tick, { color: C.text }]}>{t.symbol}</Text>
             {cue.kind === 'div' ? <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: C.div }} /> : null}
+            {cue.kind === 'redundant' ? <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: C.red }} /> : null}
           </View>
           <Text numberOfLines={1} style={[styles.cname, { color: C.muted }]}>{t.name}</Text>
           <Text numberOfLines={1} style={[styles.csec, { color: C.faint }]}>
             {t.sector}
-            {cue.kind === 'redundant' ? <Text style={{ color: C.muted }}>{`  ≈ ${cue.twin}`}</Text> : null}
+            {cue.kind === 'redundant' ? <Text style={{ color: C.red }}>{`  ≈ ${cue.twin}`}</Text> : null}
             {cue.kind === 'div' ? <Text style={{ color: C.div }}>  diversifies</Text> : null}
           </Text>
         </View>
@@ -731,8 +764,8 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
       <Pressable onPress={onSel} hitSlop={8} accessibilityRole="button"
         accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${t.symbol}${cue.kind === 'div' ? ', diversifies your basket' : cue.kind === 'redundant' ? `, correlated with ${cue.twin}` : ''}`}>
         <Animated.View style={[styles.selBtn, { transform: [{ scale }],
-          backgroundColor: selected ? C.accent : cue.kind === 'div' ? C.divSoft : C.surface2 }]}>
-          <Text style={{ fontSize: 22, fontWeight: '600', color: selected ? C.accentInk : cue.kind === 'div' ? C.div : C.muted, marginTop: -2 }}>
+          backgroundColor: selected ? C.accent : cue.kind === 'div' ? C.divSoft : cue.kind === 'redundant' ? C.redSoft : C.surface2 }]}>
+          <Text style={{ fontSize: 22, fontWeight: '600', color: selected ? C.accentInk : cue.kind === 'div' ? C.div : cue.kind === 'redundant' ? C.red : C.muted, marginTop: -2 }}>
             {selected ? '✓' : '+'}
           </Text>
         </Animated.View>

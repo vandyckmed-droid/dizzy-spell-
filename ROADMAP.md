@@ -28,8 +28,10 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 - 🟡 **Residual momentum** — OLS α, β over the trailing 756 days vs a fixed ETF (VTI); true residuals
   `e = r − α − β·m` over the chosen window; short-history names marked n/a.
 - 🟡 **Correlation-to-basket cue** — as you scroll, redundant names (high ρ vs a held name) fade and
-  show their nearest twin; diversifiers (low ρ) get a teal dot & add button. Thresholds are
-  **user-configurable** (default: diversify < 0.45, redundant ≥ 0.60) via the cue sheet.
+  get a **red dot + ≈ twin + red add button**; diversifiers (low ρ) get the complementary **teal dot +
+  add button**. Thresholds are **user-configurable** (default: diversify < 0.45, redundant ≥ 0.60).
+- 🟢 **Normalized 0–100 score** (optional) — rescales the ranking score so 100 = the top name in the
+  universe and 0 = the bottom; the raw score stays as a subscript. Works in any mode.
 - 🟢 Sort & filter (market-cap band, exchange); selection persisted **by date** (survives rebuilds).
 - 🟢 **Checkmark select** — a round ＋ / ✓ button toggles a name into the basket (with a little
   bounce and a haptic); tapping the row body opens the detail. The button picks up the basket cue
