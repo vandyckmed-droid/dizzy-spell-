@@ -66,6 +66,13 @@ Status: ✅ done · 🚧 in progress · ⬜ planned/candidate.
 - ✅ 🟢 Detail shows **β and annualized α (vs VTI, 756d OLS)** per name.
 - All 7 scoring configs cross-checked against the NumPy reference (**991 checks**).
 
+### Fixes
+- ✅ 🟢 **As-of persistence bug** — the as-of was persisted as a numeric index, so a snapshot
+  rebuild that shifted the calendar (520→800 trading days) silently pointed it at an old day,
+  which broke residual momentum (all names n/a). Now persisted as a **date string** and resolved
+  by date each load, falling back to the latest date when the saved date isn't in the new calendar
+  (auto-recovers a stuck state).
+
 ### V3.1 polish
 - ✅ 🟢 Count line shows selections **within the current ranked list** ("N selected here")
 - ✅ 🟢 **Clear basket** button (with confirm) on the Portfolio view

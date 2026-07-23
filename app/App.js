@@ -142,9 +142,13 @@ function Root() {
   }, [tab]);
 
   const persist = useCallback((next) => {
-    setSt(next);
-    AsyncStorage.setItem(STORE_KEY, JSON.stringify(next)).catch(() => {});
-  }, []);
+    // keep asofDate (the durable key) in sync with the numeric asof index so
+    // the window survives snapshot rebuilds that shift the calendar
+    const synced = next && typeof next.asof === 'number' && snap.dates[next.asof]
+      ? { ...next, asofDate: snap.dates[next.asof] } : next;
+    setSt(synced);
+    AsyncStorage.setItem(STORE_KEY, JSON.stringify(synced)).catch(() => {});
+  }, [snap]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true); haptic('light');
@@ -188,6 +192,7 @@ function normalizeState(saved) {
   return {
     universe: saved.universe || null,
     asof: saved.asof ?? null,
+    asofDate: saved.asofDate || null,
     start: saved.start ?? 252,
     end: saved.end ?? 21,
     selected: Array.isArray(saved.selected) ? saved.selected : [],
@@ -206,12 +211,17 @@ function normalizeState(saved) {
 function clampState(s, snap) {
   const N = snap.dates.length;
   const uni = snap.universes[s.universe] ? s.universe : Object.keys(snap.universes)[0];
-  const asof = s.asof == null ? N - 1 : Math.max(0, Math.min(N - 1, s.asof | 0));
+  // Resolve as-of from the persisted date string, not a stale numeric index —
+  // a rebuilt snapshot shifts every index, so an old index silently points at
+  // the wrong day (which broke residual momentum after the 520→800d expansion).
+  // Fall back to the latest date when the saved date isn't in this calendar.
+  const di = s.asofDate ? snap.dates.indexOf(s.asofDate) : -1;
+  const asof = di >= 0 ? di : N - 1;
   const start = Math.max(3, Math.min(N - 1, s.start | 0));
   const end = Math.max(1, Math.min(start - 2, s.end | 0));
   const volStart = Math.max(3, Math.min(N - 1, s.volStart | 0));
   const volEnd = Math.max(1, Math.min(volStart - 2, s.volEnd | 0));
-  return { ...s, universe: uni, asof, start, end, volStart, volEnd };
+  return { ...s, universe: uni, asof, asofDate: snap.dates[asof], start, end, volStart, volEnd };
 }
 function toggleSel(st, sym) {
   const set = new Set(st.selected);
