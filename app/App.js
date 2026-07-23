@@ -66,7 +66,6 @@ const DEF_START = 250, DEF_END = 20;
 const MACRO_TFS = ['1D', '6M', '1Y'];
 const CHART_TYPES = [{ key: 'line', label: 'Line' }, { key: 'ohlc', label: 'Bars' }];
 const EMA_COLORS = ['#5AC8FA', '#FF9F0A'];   // EMA-1 (blue), EMA-2 (amber)
-const WIN_COLORS = ['#4EA8FF', '#F5A524'];   // return window A (blue), window B (amber)
 
 // Ranking modes. The score is: return (annualized), volatility (annualized), or
 // their ratio (Sharpe). Return/vol windows are configurable; market influence is
@@ -260,7 +259,6 @@ function normalizeState(saved) {
     winB: saved.winB == null ? true : !!saved.winB,
     bStart: saved.bStart ?? 126,
     bEnd: saved.bEnd ?? 20,
-    dualMode: ['blend', 'separate'].includes(saved.dualMode) ? saved.dualMode : 'separate',
     // basket-correlation cue thresholds (max daily-return ρ vs a held name)
     cueOn: saved.cueOn == null ? true : !!saved.cueOn,
     divRho: saved.divRho ?? 0.45,
@@ -316,7 +314,10 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
     const exchSet = st.exch && st.exch.length ? new Set(st.exch) : null;
     const c = cfgOf(st, betaWindow);
     const cB = cfgOfB(st, betaWindow);
-    const blend = st.winB && st.dualMode === 'blend';
+    // window B, when on, always blends 50/50 with window A into one score.
+    // Both windows are annualized (mean·252 / σ·√252 / their ratio), so a 6–1
+    // and a 12–1 window land on the same per-year scale and combine fairly.
+    const blend = st.winB;
     const out = [];
     let hidden = 0;
     for (const t of snap.tickers) {
@@ -342,7 +343,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
     return { rows: out, hidden };
   }, [snap, market, betaWindow, st.universe, st.asof, st.start, st.end, st.volStart, st.volEnd,
       st.matchVol, st.mode, st.removeMkt, st.capBand, st.exch, st.sortDir,
-      st.winB, st.dualMode, st.bStart, st.bEnd]);
+      st.winB, st.bStart, st.bEnd]);
 
   const q = query.trim().toUpperCase();
   const displayed = useMemo(() =>
@@ -458,18 +459,15 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
         {st.winB ? (
           <>
             <Text style={{ color: C.muted, fontSize: 12.5, marginTop: 6, marginBottom: 8 }}>
-              Combine the two windows into one score, or show them side by side.
+              Blended 50/50 with the {winLabel(st.start, st.end)} window into one ranking score.
             </Text>
-            <SegBar C={C} value={st.dualMode} onChange={(k) => { animateNext(); haptic('select'); persist({ ...st, dualMode: k }); }}
-              options={[{ key: 'blend', label: 'Blend' }, { key: 'separate', label: 'Separate' }]} />
             <Stepper C={C} border label="B · start offset" sub="days ago window opens" value={String(st.bStart)}
               onDec={() => setWinB({ bStart: st.bStart - 1 })} onInc={() => setWinB({ bStart: st.bStart + 1 })} />
             <Stepper C={C} border label="B · end offset" sub="days ago window closes (skip)" value={String(st.bEnd)}
               onDec={() => setWinB({ bEnd: st.bEnd - 1 })} onInc={() => setWinB({ bEnd: st.bEnd + 1 })} />
             <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 8, lineHeight: 16 }}>
-              {st.dualMode === 'blend'
-                ? `Ranking by the average of ${winLabel(st.start, st.end)} and ${winLabel(st.bStart, st.bEnd)} ${st.mode}.`
-                : `Ranking by ${winLabel(st.start, st.end)}; ${winLabel(st.bStart, st.bEnd)} shown alongside.`}
+              Rank = average of the {winLabel(st.start, st.end)} and {winLabel(st.bStart, st.bEnd)} {st.mode}.
+              Both are annualized, so the shorter and longer windows are on the same scale and combine fairly.
             </Text>
           </>
         ) : null}
@@ -496,17 +494,10 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
         </View>
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 6, paddingBottom: 8 }}>
-        {st.winB && st.dualMode === 'separate' ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <View style={{ width: 9, height: 9, borderRadius: 2.5, backgroundColor: WIN_COLORS[0] }} />
-              <Text style={[TNUM, { color: C.muted, fontSize: 11, fontWeight: '700' }]}>{winLabel(st.start, st.end)}</Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <View style={{ width: 9, height: 9, borderRadius: 2.5, backgroundColor: WIN_COLORS[1] }} />
-              <Text style={[TNUM, { color: C.muted, fontSize: 11, fontWeight: '700' }]}>{winLabel(st.bStart, st.bEnd)}</Text>
-            </View>
-          </View>
+        {st.winB ? (
+          <Text style={[TNUM, { color: C.muted, fontSize: 11, fontWeight: '700' }]}>
+            {winLabel(st.start, st.end)} + {winLabel(st.bStart, st.bEnd)} blend
+          </Text>
         ) : <View />}
         <Text style={{ color: C.faint, fontSize: 11 }}>tap ＋ to add · row opens detail</Text>
       </View>
@@ -542,7 +533,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
           <RankCard C={C} o={item} mode={st.mode} removeMkt={st.removeMkt} selected={selSet.has(item.t.symbol)}
             corr={selSet.has(item.t.symbol) ? null : corrMap.get(item.t.symbol)}
             active={st.selected.length > 0 && st.cueOn} divRho={st.divRho} redRho={st.redRho}
-            dual={{ on: st.winB, mode: st.dualMode, aLabel: winLabel(st.start, st.end), bLabel: winLabel(st.bStart, st.bEnd) }}
+            dual={{ on: st.winB }}
             onOpen={() => onOpen(item.t.symbol)}
             onToggle={() => persist(toggleSel(st, item.t.symbol))} />
         )} />
@@ -605,7 +596,7 @@ function metricStr(v, mode) {
 const metricColor = (v, mode, C) => mode === 'vol' ? C.text : (v >= 0 ? C.gain : C.loss);
 
 function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRho, dual, onOpen, onToggle }) {
-  const { t, m, mB, rank } = o;
+  const { t, m, rank } = o;
   const cue = rankCue(corr, active, divRho, redRho);
   const vol = m.annVol != null ? E.pct(m.annVol, 0) : '—';
   const rp = (removeMkt ? 'α ' : '');   // α = residual (market-neutral) return
@@ -623,20 +614,13 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
     onToggle();
   };
 
-  // right column: two clean color-coded scores (separate), one blended score
-  // (blend), or a single score + context (single window)
+  // right column: one blended score (window B on), or a single score + context
   let right;
-  if (dual && dual.on && dual.mode === 'separate') {
+  if (dual && dual.on) {
     right = (
-      <View style={{ alignItems: 'flex-end', minWidth: 76 }}>
-        <Text style={[styles.dualScore, { color: WIN_COLORS[0] }]}>{metricStr(m.score, mode)}</Text>
-        <Text style={[styles.dualScore, { color: mB ? WIN_COLORS[1] : C.faint, marginTop: 3 }]}>{metricStr(mB ? mB.score : null, mode)}</Text>
-      </View>
-    );
-  } else if (dual && dual.on && dual.mode === 'blend') {
-    right = (
-      <View style={{ alignItems: 'flex-end', minWidth: 76 }}>
+      <View style={{ alignItems: 'flex-end', minWidth: 84 }}>
         <Text style={[styles.big, { color: metricColor(o.score, mode, C) }]}>{metricStr(o.score, mode)}</Text>
+        <Text style={[styles.metricSub, { color: C.faint }]}>blend</Text>
       </View>
     );
   } else {
@@ -1952,7 +1936,6 @@ const styles = StyleSheet.create({
   cname: { fontSize: 12.5, marginTop: 2 },
   csec: { fontSize: 11, marginTop: 2 },
   big: { fontSize: 21, fontWeight: '800', letterSpacing: -0.5, ...TNUM },
-  dualScore: { fontSize: 17.5, fontWeight: '800', letterSpacing: -0.3, ...TNUM },
   metricSub: { fontSize: 11.5, marginTop: 2, ...TNUM },
   selBtn: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
   statRow: { flexDirection: 'row', gap: 12, marginBottom: 14 },
