@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, FlatList, Pressable, TextInput, Modal, RefreshControl, Switch, Alert, Image,
-  StyleSheet, useColorScheme, Animated, Easing, LayoutAnimation, Platform, UIManager,
+  StyleSheet, useColorScheme, Animated, Easing, LayoutAnimation, Platform, UIManager, PanResponder,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -610,33 +610,42 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
   const vol = m.annVol != null ? E.pct(m.annVol, 0) : '—';
   const rp = (removeMkt ? 'α ' : '');   // α = residual (market-neutral) return
 
-  // slide-to-select: horizontal drag past a threshold toggles selection; a plain
-  // tap still opens the detail; vertical drags fall through to the list scroll.
-  // Uses the raw Responder API (claims only on a horizontal-dominant move).
+  // slide-to-select: a right drag toggles selection; a plain tap opens the detail;
+  // vertical drags fall through to list scroll. A PanResponder (capture phase) grabs
+  // a horizontal drag from the inner Pressable and holds it against the list scroller.
+  // Everything mid-gesture — the row translate, the action reveal, the icon pop — is
+  // driven off one Animated value, so there are no re-renders while dragging. The row
+  // tracks the finger 1:1 to the commit point, then meets progressive resistance; a
+  // soft haptic tick fires the instant it arms, and it commits on cross OR a fast flick.
   const pan = useRef(new Animated.Value(0)).current;
-  const [armed, setArmed] = useState(false);
-  const startX = useRef(0), startY = useRef(0);
+  const armed = useRef(false);
   const selRef = useRef(selected); selRef.current = selected;
   const toggleRef = useRef(onToggle); toggleRef.current = onToggle;
-  const MAXX = 104, THRESH = 58;
-  const dxOf = (e) => e.nativeEvent.pageX - startX.current;
-  const gesture = {
-    // capture phase so the row can steal a horizontal drag from the inner Pressable,
-    // while a plain tap (and vertical scroll) stays with the child / the list
-    onStartShouldSetResponderCapture: (e) => { startX.current = e.nativeEvent.pageX; startY.current = e.nativeEvent.pageY; return false; },
-    onMoveShouldSetResponderCapture: (e) => {
-      const dx = e.nativeEvent.pageX - startX.current, dy = e.nativeEvent.pageY - startY.current;
-      return Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.5;
+  const THRESH = 64, MAX = 112;   // commit point · rubber-band ceiling
+  const settle = () => Animated.spring(pan, { toValue: 0, useNativeDriver: false, tension: 150, friction: 13 }).start();
+  const responder = useRef(PanResponder.create({
+    onMoveShouldSetPanResponderCapture: (e, gs) => gs.dx > 8 && gs.dx > Math.abs(gs.dy) * 1.4,
+    onPanResponderTerminationRequest: () => false,
+    onPanResponderGrant: () => { armed.current = false; },
+    onPanResponderMove: (e, gs) => {
+      const dx = Math.max(0, gs.dx);
+      // 1:1 up to the commit point, then a stiffening rubber band toward MAX
+      pan.setValue(dx <= THRESH ? dx : Math.min(MAX, THRESH + (dx - THRESH) * 0.32));
+      const past = dx >= THRESH;
+      if (past !== armed.current) { armed.current = past; haptic(past ? 'select' : 'light'); }
     },
-    onResponderGrant: () => setArmed(true),
-    onResponderMove: (e) => pan.setValue(Math.max(0, Math.min(MAXX, dxOf(e)))),
-    onResponderRelease: (e) => {
-      const commit = dxOf(e) > THRESH;
-      Animated.spring(pan, { toValue: 0, useNativeDriver: true, friction: 7, tension: 130 }).start(() => setArmed(false));
-      if (commit) { haptic(selRef.current ? 'light' : 'select'); toggleRef.current(); }
+    onPanResponderRelease: (e, gs) => {
+      const dx = Math.max(0, gs.dx);
+      const commit = dx >= THRESH || (dx > 24 && gs.vx > 0.5);   // crossed OR fast flick
+      if (commit) { haptic(selRef.current ? 'warn' : 'success'); toggleRef.current(); }
+      settle();
     },
-    onResponderTerminate: () => { Animated.spring(pan, { toValue: 0, useNativeDriver: true }).start(() => setArmed(false)); },
-  };
+    onPanResponderTerminate: settle,
+  })).current;
+  // reveal ramps in smoothly; the label leads with a hint of parallax and pops on arm
+  const revealOpacity = pan.interpolate({ inputRange: [0, 8, THRESH], outputRange: [0, 0.32, 1], extrapolate: 'clamp' });
+  const labelShift = pan.interpolate({ inputRange: [0, THRESH], outputRange: [-12, 0], extrapolate: 'clamp' });
+  const iconScale = pan.interpolate({ inputRange: [THRESH - 20, THRESH, MAX], outputRange: [0.8, 1, 1.14], extrapolate: 'clamp' });
 
   // right column: two clean color-coded scores (separate), one blended score
   // (blend), or a single score + context (single window)
@@ -668,12 +677,13 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
   }
   return (
     <View style={{ borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line, overflow: 'hidden' }}>
-      {armed ? (
-        <View style={[StyleSheet.absoluteFill, { flexDirection: 'row', alignItems: 'center', paddingLeft: 18, backgroundColor: selected ? C.lossSoft : C.divSoft }]}>
-          <Text style={{ color: selected ? C.loss : C.div, fontSize: 13, fontWeight: '800' }}>{selected ? '✕  Remove' : '＋  Add'}</Text>
-        </View>
-      ) : null}
-      <Animated.View {...gesture}
+      <Animated.View pointerEvents="none"
+        style={[StyleSheet.absoluteFill, { flexDirection: 'row', alignItems: 'center', paddingLeft: 22, backgroundColor: selected ? C.lossSoft : C.divSoft, opacity: revealOpacity }]}>
+        <Animated.Text style={{ color: selected ? C.loss : C.div, fontSize: 13.5, fontWeight: '800', letterSpacing: 0.2, transform: [{ translateX: labelShift }, { scale: iconScale }] }}>
+          {selected ? '✕  Remove' : '＋  Add'}
+        </Animated.Text>
+      </Animated.View>
+      <Animated.View {...responder.panHandlers} dataSet={{ swipe: t.symbol }}
         style={{ transform: [{ translateX: pan }], backgroundColor: selected ? C.selRow : C.ground, flexDirection: 'row', alignItems: 'stretch' }}>
         <View style={{ width: 3, backgroundColor: selected ? C.accent : 'transparent' }} />
         <Pressable style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 15, paddingHorizontal: 10, minWidth: 0, opacity: cue.opacity }}
