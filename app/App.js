@@ -42,6 +42,7 @@ const palettes = {
     gain: '#00C805', loss: '#FF5000',
     gainSoft: 'rgba(0,200,5,0.14)', lossSoft: 'rgba(255,80,0,0.14)',
     div: '#3DD6C0', divSoft: 'rgba(61,214,192,0.16)',
+    selRow: '#0C1A0E',
   },
   light: {
     ground: '#FFFFFF', surface: '#FFFFFF', surface2: '#F2F4F6', raised: '#E9ECEF',
@@ -51,6 +52,7 @@ const palettes = {
     gain: '#00A804', loss: '#E63A00',
     gainSoft: 'rgba(0,168,4,0.12)', lossSoft: 'rgba(230,58,0,0.12)',
     div: '#0E9E8C', divSoft: 'rgba(14,158,140,0.12)',
+    selRow: '#EAF7EC',
   },
 };
 
@@ -64,6 +66,7 @@ const DEF_START = 250, DEF_END = 20;
 const MACRO_TFS = ['1D', '6M', '1Y'];
 const CHART_TYPES = [{ key: 'line', label: 'Line' }, { key: 'ohlc', label: 'Bars' }];
 const EMA_COLORS = ['#5AC8FA', '#FF9F0A'];   // EMA-1 (blue), EMA-2 (amber)
+const WIN_COLORS = ['#4EA8FF', '#F5A524'];   // return window A (blue), window B (amber)
 
 // Ranking modes. The score is: return (annualized), volatility (annualized), or
 // their ratio (Sharpe). Return/vol windows are configurable; market influence is
@@ -492,6 +495,21 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
           </Pressable>
         </View>
       </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 6, paddingBottom: 8 }}>
+        {st.winB && st.dualMode === 'separate' ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+              <View style={{ width: 9, height: 9, borderRadius: 2.5, backgroundColor: WIN_COLORS[0] }} />
+              <Text style={[TNUM, { color: C.muted, fontSize: 11, fontWeight: '700' }]}>{winLabel(st.start, st.end)}</Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+              <View style={{ width: 9, height: 9, borderRadius: 2.5, backgroundColor: WIN_COLORS[1] }} />
+              <Text style={[TNUM, { color: C.muted, fontSize: 11, fontWeight: '700' }]}>{winLabel(st.bStart, st.bEnd)}</Text>
+            </View>
+          </View>
+        ) : <View />}
+        <Text style={{ color: C.faint, fontSize: 11 }}>swipe a row → to select</Text>
+      </View>
       {st.selected.length ? (
         <Pressable onPress={() => setCueOpen(true)} accessibilityLabel="Basket cue settings"
           style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 6, paddingBottom: 8 }}>
@@ -591,40 +609,51 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
   const cue = rankCue(corr, active, divRho, redRho);
   const vol = m.annVol != null ? E.pct(m.annVol, 0) : '—';
   const rp = (removeMkt ? 'α ' : '');   // α = residual (market-neutral) return
-  const scale = useRef(new Animated.Value(1)).current;
-  const onSel = () => {
-    Animated.sequence([
-      Animated.timing(scale, { toValue: 0.8, duration: 70, useNativeDriver: true }),
-      Animated.spring(scale, { toValue: 1, friction: 4, tension: 140, useNativeDriver: true }),
-    ]).start();
-    onToggle();
+
+  // slide-to-select: horizontal drag past a threshold toggles selection; a plain
+  // tap still opens the detail; vertical drags fall through to the list scroll.
+  // Uses the raw Responder API (claims only on a horizontal-dominant move).
+  const pan = useRef(new Animated.Value(0)).current;
+  const [armed, setArmed] = useState(false);
+  const startX = useRef(0), startY = useRef(0);
+  const selRef = useRef(selected); selRef.current = selected;
+  const toggleRef = useRef(onToggle); toggleRef.current = onToggle;
+  const MAXX = 104, THRESH = 58;
+  const dxOf = (e) => e.nativeEvent.pageX - startX.current;
+  const gesture = {
+    // capture phase so the row can steal a horizontal drag from the inner Pressable,
+    // while a plain tap (and vertical scroll) stays with the child / the list
+    onStartShouldSetResponderCapture: (e) => { startX.current = e.nativeEvent.pageX; startY.current = e.nativeEvent.pageY; return false; },
+    onMoveShouldSetResponderCapture: (e) => {
+      const dx = e.nativeEvent.pageX - startX.current, dy = e.nativeEvent.pageY - startY.current;
+      return Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.5;
+    },
+    onResponderGrant: () => setArmed(true),
+    onResponderMove: (e) => pan.setValue(Math.max(0, Math.min(MAXX, dxOf(e)))),
+    onResponderRelease: (e) => {
+      const commit = dxOf(e) > THRESH;
+      Animated.spring(pan, { toValue: 0, useNativeDriver: true, friction: 7, tension: 130 }).start(() => setArmed(false));
+      if (commit) { haptic(selRef.current ? 'light' : 'select'); toggleRef.current(); }
+    },
+    onResponderTerminate: () => { Animated.spring(pan, { toValue: 0, useNativeDriver: true }).start(() => setArmed(false)); },
   };
-  // right column: single value + context (default), or the two windows
+
+  // right column: two clean color-coded scores (separate), one blended score
+  // (blend), or a single score + context (single window)
   let right;
-  if (dual && dual.on) {
-    const aVal = m.score, bVal = mB ? mB.score : null;
-    if (dual.mode === 'blend') {
-      const blended = o.score;
-      right = (
-        <View style={{ alignItems: 'flex-end', minWidth: 96 }}>
-          <Text style={[styles.metricSub, { color: C.faint }]}>{dual.aLabel} + {dual.bLabel}</Text>
-          <Text style={[styles.big, { color: metricColor(blended, mode, C) }]}>{metricStr(blended, mode)}</Text>
-          <Text style={[styles.metricSub, { color: C.muted }]}>
-            {dual.aLabel} {metricStr(aVal, mode)} · {dual.bLabel} {metricStr(bVal, mode)}
-          </Text>
-        </View>
-      );
-    } else {
-      right = (
-        <View style={{ alignItems: 'flex-end', minWidth: 96 }}>
-          <Text style={[styles.metricSub, { color: C.faint }]}>{dual.aLabel}</Text>
-          <Text style={[styles.big, { color: metricColor(aVal, mode, C) }]}>{metricStr(aVal, mode)}</Text>
-          <Text style={[styles.metricSub, { color: C.faint }]}>
-            {dual.bLabel} <Text style={{ color: mB ? metricColor(bVal, mode, C) : C.faint }}>{metricStr(bVal, mode)}</Text>
-          </Text>
-        </View>
-      );
-    }
+  if (dual && dual.on && dual.mode === 'separate') {
+    right = (
+      <View style={{ alignItems: 'flex-end', minWidth: 76 }}>
+        <Text style={[styles.dualScore, { color: WIN_COLORS[0] }]}>{metricStr(m.score, mode)}</Text>
+        <Text style={[styles.dualScore, { color: mB ? WIN_COLORS[1] : C.faint, marginTop: 3 }]}>{metricStr(mB ? mB.score : null, mode)}</Text>
+      </View>
+    );
+  } else if (dual && dual.on && dual.mode === 'blend') {
+    right = (
+      <View style={{ alignItems: 'flex-end', minWidth: 76 }}>
+        <Text style={[styles.big, { color: metricColor(o.score, mode, C) }]}>{metricStr(o.score, mode)}</Text>
+      </View>
+    );
   } else {
     let big, sub;
     if (mode === 'return') { big = E.signPct(m.annRet, 0); sub = `σ ${vol} · ${rp}${E.signPct(m.cum, 0)} cum`; }
@@ -638,32 +667,33 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
     );
   }
   return (
-    <View style={[styles.card, { backgroundColor: selected ? C.accentSoft : 'transparent', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line }]}>
-      <Pressable style={[styles.cardTap, { opacity: cue.opacity }]} onPress={onOpen} hitSlop={4}>
-        <Text style={[styles.rank, { color: selected ? C.accent : C.faint }]}>{rank}</Text>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Text style={[styles.tick, { color: C.text }]}>{t.symbol}</Text>
-            {cue.kind === 'div' ? <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: C.div }} /> : null}
-          </View>
-          <Text numberOfLines={1} style={[styles.cname, { color: C.muted }]}>{t.name}</Text>
-          <Text numberOfLines={1} style={[styles.csec, { color: C.faint }]}>
-            {t.sector}
-            {cue.kind === 'redundant' ? <Text style={{ color: C.muted }}>{`  ≈ ${cue.twin}`}</Text> : null}
-            {cue.kind === 'div' ? <Text style={{ color: C.div }}>  diversifies</Text> : null}
-          </Text>
+    <View style={{ borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line, overflow: 'hidden' }}>
+      {armed ? (
+        <View style={[StyleSheet.absoluteFill, { flexDirection: 'row', alignItems: 'center', paddingLeft: 18, backgroundColor: selected ? C.lossSoft : C.divSoft }]}>
+          <Text style={{ color: selected ? C.loss : C.div, fontSize: 13, fontWeight: '800' }}>{selected ? '✕  Remove' : '＋  Add'}</Text>
         </View>
-        {right}
-      </Pressable>
-      <Pressable onPress={onSel} hitSlop={8} accessibilityRole="button"
-        accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${t.symbol}${cue.kind === 'div' ? ', diversifies your basket' : cue.kind === 'redundant' ? `, correlated with ${cue.twin}` : ''}`}>
-        <Animated.View style={[styles.selBtn, { transform: [{ scale }],
-          backgroundColor: selected ? C.accent : cue.kind === 'div' ? C.divSoft : C.surface2 }]}>
-          <Text style={{ fontSize: 22, fontWeight: '600', color: selected ? C.accentInk : cue.kind === 'div' ? C.div : C.muted, marginTop: -2 }}>
-            {selected ? '✓' : '+'}
-          </Text>
-        </Animated.View>
-      </Pressable>
+      ) : null}
+      <Animated.View {...gesture}
+        style={{ transform: [{ translateX: pan }], backgroundColor: selected ? C.selRow : C.ground, flexDirection: 'row', alignItems: 'stretch' }}>
+        <View style={{ width: 3, backgroundColor: selected ? C.accent : 'transparent' }} />
+        <Pressable style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 15, paddingHorizontal: 10, minWidth: 0, opacity: cue.opacity }}
+          onPress={onOpen} hitSlop={4}>
+          <Text style={[styles.rank, { color: selected ? C.accent : C.faint }]}>{rank}</Text>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={[styles.tick, { color: C.text }]}>{t.symbol}</Text>
+              {cue.kind === 'div' ? <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: C.div }} /> : null}
+            </View>
+            <Text numberOfLines={1} style={[styles.cname, { color: C.muted }]}>{t.name}</Text>
+            <Text numberOfLines={1} style={[styles.csec, { color: C.faint }]}>
+              {t.sector}
+              {cue.kind === 'redundant' ? <Text style={{ color: C.muted }}>{`  ≈ ${cue.twin}`}</Text> : null}
+              {cue.kind === 'div' ? <Text style={{ color: C.div }}>  diversifies</Text> : null}
+            </Text>
+          </View>
+          {right}
+        </Pressable>
+      </Animated.View>
     </View>
   );
 }
@@ -1938,6 +1968,7 @@ const styles = StyleSheet.create({
   cname: { fontSize: 12.5, marginTop: 2 },
   csec: { fontSize: 11, marginTop: 2 },
   big: { fontSize: 21, fontWeight: '800', letterSpacing: -0.5, ...TNUM },
+  dualScore: { fontSize: 17.5, fontWeight: '800', letterSpacing: -0.3, ...TNUM },
   metricSub: { fontSize: 11.5, marginTop: 2, ...TNUM },
   selBtn: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
   statRow: { flexDirection: 'row', gap: 12, marginBottom: 14 },
