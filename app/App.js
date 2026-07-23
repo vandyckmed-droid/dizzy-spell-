@@ -60,11 +60,12 @@ const MODES = [
   { key: 'return', label: 'Return', short: 'Return' },
   { key: 'vol', label: 'Volatility', short: 'Vol' },
 ];
-function cfgOf(st) {
+function cfgOf(st, betaWindow) {
   return {
     retStart: st.start, retEnd: st.end,
     volStart: st.volStart, volEnd: st.volEnd,
     matchVol: st.matchVol, mode: st.mode, removeMkt: st.removeMkt,
+    betaWindow: betaWindow || 756,
   };
 }
 function marketReturns(snap) {
@@ -118,8 +119,8 @@ function Root() {
   const [query, setQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const fade = useRef(new Animated.Value(0)).current;
-  // cap-weighted Top-500 daily market returns (for the residual option)
-  const market = useMemo(() => marketReturns(snap), [snap]);
+  // fixed-ETF (VTI) daily market returns embedded in the snapshot; fallback for old snapshots
+  const market = useMemo(() => (Array.isArray(snap.market) && snap.market.length ? snap.market : marketReturns(snap)), [snap]);
 
   /* ---- load persisted UI state (selections + window + caps + sort/filter) ---- */
   useEffect(() => {
@@ -223,18 +224,24 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
   const [filterOpen, setFilterOpen] = useState(false);
   const pulse = useRef(new Animated.Value(1)).current;
   const dir = st.sortDir === 'asc' ? 1 : -1;
-  const cfg = cfgOf(st);
+  const betaWindow = snap.betaWindow || 756;
+  const cfg = cfgOf(st, betaWindow);
 
-  // score every ticker with the configured window / mode / residual settings, then rank
-  const ranked = useMemo(() => {
+  // score every ticker with the configured window / mode / residual settings, then rank.
+  // In residual mode, names lacking the 756d beta window are marked unavailable (hidden), not faked.
+  const { rows: ranked, hidden } = useMemo(() => {
     const band = CAP_BANDS.find(b => b.key === st.capBand) || CAP_BANDS[0];
     const exchSet = st.exch && st.exch.length ? new Set(st.exch) : null;
-    const c = cfgOf(st);
+    const c = cfgOf(st, betaWindow);
     const out = [];
+    let hidden = 0;
     for (const t of snap.tickers) {
       if (!t.universes.includes(st.universe) || !band.test(t.marketCap || 0) || (exchSet && !exchSet.has(t.exchange))) continue;
       const r = E.momentumScore(t.closes, market, st.asof, c);
-      if (!r || r.score == null || Number.isNaN(r.score)) continue;
+      if (!r || r.score == null || Number.isNaN(r.score)) {
+        if (c.removeMkt && E.momentumDaily(t.closes, st.asof, st.start, st.end)) hidden++;
+        continue;
+      }
       out.push({ t, m: r });
     }
     out.sort((a, b) => {
@@ -244,8 +251,8 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
       return dir * (av - bv);
     });
     out.forEach((o, i) => (o.rank = i + 1));
-    return out;
-  }, [snap, market, st.universe, st.asof, st.start, st.end, st.volStart, st.volEnd,
+    return { rows: out, hidden };
+  }, [snap, market, betaWindow, st.universe, st.asof, st.start, st.end, st.volStart, st.volEnd,
       st.matchVol, st.mode, st.removeMkt, st.capBand, st.exch, st.sortDir]);
 
   const q = query.trim().toUpperCase();
@@ -331,7 +338,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
 
       <View style={styles.countLine}>
         <Text style={{ color: C.muted, fontSize: 12 }}>
-          <Text style={{ color: C.text, fontWeight: '700' }}>{displayed.length}</Text> ranked · {selInView} selected here
+          <Text style={{ color: C.text, fontWeight: '700' }}>{displayed.length}</Text> ranked · {selInView} selected here{st.removeMkt && hidden ? ` · ${hidden} n/a` : ''}
         </Text>
         <View style={{ flexDirection: 'row', gap: 8 }}>
           <Pressable onPress={() => setFilterOpen(true)} accessibilityLabel="Filter"
@@ -480,12 +487,26 @@ function ToggleRow({ C, label, sub, value, onChange, border }) {
 function ScoreNote({ C, snap, st }) {
   const vStart = st.matchVol ? st.start : st.volStart;
   const vEnd = st.matchVol ? st.end : st.volEnd;
+  const bw = snap.betaWindow || 756;
+  const mkt = snap.marketSymbol || 'the market';
+  const noHist = st.removeMkt && st.asof < bw;
   let base;
   if (st.mode === 'return') base = `Annualized return over the return window (mean daily × 252).`;
   else if (st.mode === 'vol') base = `Annualized volatility (sample σ × √252) over the ${vStart}→${vEnd} window.`;
   else base = `Sharpe = annualized return (${st.start}→${st.end}) ÷ annualized σ (${vStart}→${vEnd}), rf = 0.`;
-  const resid = st.removeMkt ? ` Returns are residualized against the cap-weighted Top-500 (market β removed).` : '';
-  return <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 10, lineHeight: 16 }}>{base}{resid}</Text>;
+  const resid = st.removeMkt
+    ? ` Residual momentum: α and β estimated by OLS over the trailing ${bw} days vs ${mkt}, then residuals e = r − α − β·m are taken over your window (cumulative shown is the residual). Names without ${bw}d of history are marked n/a.`
+    : '';
+  return (
+    <View>
+      <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 10, lineHeight: 16 }}>{base}{resid}</Text>
+      {noHist ? (
+        <Text style={{ color: C.loss, fontSize: 11.5, marginTop: 6, fontWeight: '600' }}>
+          ⚠︎ Residual momentum needs {bw} trading days before the as-of date — move the as-of later.
+        </Text>
+      ) : null}
+    </View>
+  );
 }
 function FilterSheet({ C, visible, onClose, st, setFilter }) {
   const toggleExch = (ex) => {
@@ -695,11 +716,14 @@ function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen, onSector 
   const inPf = st.selected.includes(sym);
   // sector tag jumps to that sector's universe if one exists
   const sectorUni = Object.entries(snap.universes).find(([, u]) => u.label === t.sector);
-  const m = E.momentumScore(t.closes, market, st.asof, cfgOf(st));
+  const m = E.momentumScore(t.closes, market, st.asof, cfgOf(st, snap.betaWindow));
   const asofDate = snap.dates[st.asof];
-  const scoreLabel = (st.mode === 'return' ? 'Ann. return' : st.mode === 'vol' ? 'Volatility' : 'Sharpe') + (st.removeMkt ? ' (α)' : '');
-  const scoreShow = m == null ? '—' : (st.mode === 'sharpe' ? E.fmtSharpe(m.score) : st.mode === 'vol' ? E.pct(m.annVol, 0) : E.signPct(m.annRet, 0));
-  const scoreColor = m == null ? C.text : (st.mode === 'vol' ? C.text : ((st.mode === 'sharpe' ? m.score : m.annRet) >= 0 ? C.gain : C.loss));
+  const scoreLabel = st.removeMkt
+    ? (st.mode === 'vol' ? 'Idio. vol' : st.mode === 'return' ? 'Resid ret.' : 'Resid Sharpe')
+    : (st.mode === 'return' ? 'Ann. return' : st.mode === 'vol' ? 'Volatility' : 'Sharpe');
+  const scoreShow = m == null ? 'n/a' : (st.mode === 'sharpe' ? E.fmtSharpe(m.score) : st.mode === 'vol' ? E.pct(m.annVol, 0) : E.signPct(m.annRet, 0));
+  const scoreColor = m == null ? C.faint : (st.mode === 'vol' ? C.text : ((st.mode === 'sharpe' ? m.score : m.annRet) >= 0 ? C.gain : C.loss));
+  const retLabel = st.removeMkt ? 'Resid cum' : 'Window ret.';
 
   return (
     <View style={{ flex: 1, backgroundColor: C.ground, paddingTop: insets.top }}>
@@ -733,9 +757,16 @@ function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen, onSector 
 
         <View style={styles.dstat}>
           <Stat C={C} v={scoreShow} l={scoreLabel} color={scoreColor} />
-          <Stat C={C} v={m ? E.signPct(m.cum, 0) : '—'} l="Window ret." color={m ? (m.cum >= 0 ? C.gain : C.loss) : C.text} />
-          <Stat C={C} v={m && m.annVol != null ? E.pct(m.annVol, 0) : '—'} l="Ann. vol" />
+          <Stat C={C} v={m ? E.signPct(m.cum, 0) : 'n/a'} l={retLabel} color={m ? (m.cum >= 0 ? C.gain : C.loss) : C.faint} />
+          <Stat C={C} v={m && m.annVol != null ? E.pct(m.annVol, 0) : 'n/a'} l={st.removeMkt ? 'Idio. vol' : 'Ann. vol'} />
         </View>
+        {st.removeMkt ? (
+          <View style={{ marginHorizontal: 16, marginTop: -6, marginBottom: 12 }}>
+            <Text style={{ color: C.faint, fontSize: 11.5 }}>
+              {m ? `β ${m.beta.toFixed(2)} · α ${E.signPct(m.alpha * 252, 1)}/yr  ·  vs ${snap.marketSymbol || 'market'}, ${snap.betaWindow || 756}d OLS` : `Residual n/a — needs ${snap.betaWindow || 756}d of history before this as-of date.`}
+            </Text>
+          </View>
+        ) : null}
 
         <View style={{ marginHorizontal: 16, marginBottom: 14 }}>
           <ScrubChart C={C} snap={snap} ticker={t} st={st} />
@@ -804,11 +835,12 @@ function ScrubChart({ C, snap, ticker, st }) {
   const H = 210, padX = 6, padTop = 12, padBot = 16;
 
   const end = st.asof;
-  const series = ticker.closes.slice(0, end + 1);
-  const dates = snap.dates.slice(0, end + 1);
+  const start0 = ticker.histStart || 0;   // skip leading nulls (pre-listing)
+  const series = ticker.closes.slice(start0, end + 1);
+  const dates = snap.dates.slice(start0, end + 1);
   const n = series.length;
-  const winLo = Math.max(0, Math.min(n - 1, st.asof - st.start));
-  const winHi = Math.max(0, Math.min(n - 1, st.asof - st.end));
+  const winLo = Math.max(0, Math.min(n - 1, (st.asof - st.start) - start0));
+  const winHi = Math.max(0, Math.min(n - 1, (st.asof - st.end) - start0));
 
   const lo = Math.min(...series), hi = Math.max(...series), rng = (hi - lo) || 1;
   const X = (i) => padX + (n <= 1 ? 0 : (i / (n - 1)) * (w - 2 * padX));

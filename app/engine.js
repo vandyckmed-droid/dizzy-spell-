@@ -34,6 +34,7 @@ function momentumDaily(closes, asof, startOff, endOff){
   const lo = asof - startOff, hi = asof - endOff;
   if (lo < 0 || hi >= closes.length || hi <= lo) return null;
   const seg = closes.slice(lo, hi + 1);
+  for (let i = 0; i < seg.length; i++) if (seg[i] == null || !(seg[i] > 0)) return null;
   return { r: simpleReturns(seg), lo, hi, cum: seg[seg.length - 1] / seg[0] - 1 };
 }
 
@@ -42,18 +43,16 @@ function annualizeStats(r){
   return { annRet: mean(r) * TD, annVol: sampleStd(r) * Math.sqrt(TD) };
 }
 
-function residualize(sret, mret){
-  const n = Math.min(sret.length, mret.length);
-  if (n < 3) return null;
-  let sm = 0, mm = 0;
-  for (let i = 0; i < n; i++) { sm += sret[i]; mm += mret[i]; }
-  sm /= n; mm /= n;
-  let cov = 0, varm = 0;
-  for (let i = 0; i < n; i++) { const dm = mret[i] - mm; cov += (sret[i] - sm) * dm; varm += dm * dm; }
-  const beta = varm > 0 ? cov / varm : 0;
-  const e = new Array(n);
-  for (let i = 0; i < n; i++) e[i] = sret[i] - beta * mret[i];
-  return { e, beta };
+function olsFit(y, x){
+  const n = Math.min(y.length, x.length);
+  if (n < 60) return null;
+  let my = 0, mx = 0;
+  for (let i = 0; i < n; i++){ my += y[i]; mx += x[i]; }
+  my /= n; mx /= n;
+  let cov = 0, vx = 0;
+  for (let i = 0; i < n; i++){ const dx = x[i] - mx; cov += (y[i] - my) * dx; vx += dx * dx; }
+  const beta = vx > 0 ? cov / vx : 0;
+  return { alpha: my - beta * mx, beta, n };
 }
 
 function momentumScore(closes, market, asof, cfg){
@@ -63,12 +62,19 @@ function momentumScore(closes, market, asof, cfg){
   const vEnd = cfg.matchVol ? cfg.retEnd : cfg.volEnd;
   const vw = momentumDaily(closes, asof, vStart, vEnd);
   if (cfg.mode !== 'return' && !vw) return null;
-  let rRet = rw.r, vRet = vw ? vw.r : null, beta = null;
+  let rRet = rw.r, vRet = vw ? vw.r : null, beta = null, alpha = null, cum = rw.cum;
   if (cfg.removeMkt) {
-    const rr = residualize(rw.r, market.slice(rw.lo, rw.hi));
-    if (!rr) return null;
-    rRet = rr.e; beta = rr.beta;
-    if (vw) { const vr = residualize(vw.r, market.slice(vw.lo, vw.hi)); if (!vr) return null; vRet = vr.e; }
+    const bw = cfg.betaWindow || 756;
+    const bLo = asof - bw, bHi = asof;
+    if (bLo < 0) return null;                       // insufficient history for beta
+    const bseg = closes.slice(bLo, bHi + 1);
+    for (let i = 0; i < bseg.length; i++) if (bseg[i] == null || !(bseg[i] > 0)) return null;
+    const fit = olsFit(simpleReturns(bseg), market.slice(bLo, bHi));
+    if (!fit) return null;
+    alpha = fit.alpha; beta = fit.beta;
+    rRet = rw.r.map((v, i) => v - alpha - beta * market[rw.lo + i]);
+    if (vw) vRet = vw.r.map((v, i) => v - alpha - beta * market[vw.lo + i]);
+    let cr = 1; for (const e of rRet) cr *= (1 + e); cum = cr - 1;  // cumulative residual
   }
   const ra = annualizeStats(rRet);
   if (!ra) return null;
@@ -78,7 +84,7 @@ function momentumScore(closes, market, asof, cfg){
   if (cfg.mode === 'return') score = annRet;
   else if (cfg.mode === 'vol') score = annVol;
   else score = (annVol && annVol > 0) ? annRet / annVol : 0;
-  return { annRet, annVol, score, cum: rw.cum, beta };
+  return { annRet, annVol, score, cum, beta, alpha };
 }
 
 function covMatrix(R){                       // R: T×N returns -> N×N sample cov
@@ -248,4 +254,4 @@ function fmtCap(x){ if(x>=1e12) return '$'+(x/1e12).toFixed(2)+'T'; if(x>=1e9) r
 
 function clsOf(x){ return x>=0?'gain':'loss'; }
 
-export { simpleReturns, mean, sampleStd, sharpeMomentum, momentumDaily, annualizeStats, residualize, momentumScore, covMatrix, corrFromCov, quasiDiagOrder, clusterVar, recursiveBisection, hrpWeights, applyCaps, periodReturn, pct, signPct, fmtSharpe, fmtCap, clsOf, TD };
+export { simpleReturns, mean, sampleStd, sharpeMomentum, momentumDaily, annualizeStats, olsFit, momentumScore, covMatrix, corrFromCov, quasiDiagOrder, clusterVar, recursiveBisection, hrpWeights, applyCaps, periodReturn, pct, signPct, fmtSharpe, fmtCap, clsOf, TD };

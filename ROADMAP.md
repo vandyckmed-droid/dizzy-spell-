@@ -45,6 +45,19 @@ Status: ✅ done · 🚧 in progress · ⬜ planned/candidate.
 - ❌ Reverted: the fixed 12–1 / 6–1 / residual "factor" popup (superseded by the configurable score)
 - ❌ Declined: composite multi-factor blend, Sortino, trend-vs-200d
 
+### V4 — research-standard residual momentum (external review)
+- ✅ 🟡 **Fixed ETF market proxy (VTI)** — replaces the cap-weighted-current-constituents proxy;
+  no membership/weight bias, no self-inclusion. Stored in the snapshot as a daily-return series.
+- ✅ 🟡 **756-day (36-month) OLS β + intercept**, estimated separately from the momentum signal
+  window (was: β from the same short window — the review's main finding).
+- ✅ 🟢 True regression residuals **e = r − α − β·m** over the user's selected return/vol windows.
+- ✅ 🟢 **Cumulative residual** computed from the residual series (fixes the bug where a raw
+  cumulative return was shown with an α label).
+- ✅ 🟢 Short-history names **marked n/a** in residual mode (count shown), not silently computed;
+  history extended 520→800 trading days (~1.8→2.7 MB) so the 756-day window fits.
+- ✅ 🟢 Detail shows **β and annualized α (vs VTI, 756d OLS)** per name.
+- All 7 scoring configs cross-checked against the NumPy reference (**991 checks**).
+
 ### V3.1 polish
 - ✅ 🟢 Count line shows selections **within the current ranked list** ("N selected here")
 - ✅ 🟢 **Clear basket** button (with confirm) on the Portfolio view

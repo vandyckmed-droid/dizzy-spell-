@@ -16,30 +16,27 @@ for s in syms:
     r = ref.sharpe_momentum(tk[s]["closes"], asof, 252, 21)
     sm[s] = None if r is None else {k: r[k] for k in ("sharpe", "ann_ret", "ann_vol", "cum", "n")}
 
-# cap-weighted market daily returns over the full history (us_top500 pool)
-pool = [t for t in snap["tickers"] if "us_top500" in t["universes"]]
-total_cap = sum(t["marketCap"] for t in pool) or 1.0
-mret_all = np.zeros(N - 1)
-for t in pool:
-    c = np.asarray(t["closes"], float)
-    mret_all += (t["marketCap"] / total_cap) * (c[1:] / c[:-1] - 1.0)
-mret_list = [float(x) for x in mret_all]
+# fixed-ETF market daily returns straight from the snapshot (VTI)
+mret_all = snap["market"]
+mret_list = mret_all
+BW = snap.get("betaWindow", 756)
 
 # momentum_score across several configs for the sample
 CONFIGS = {
-    "default": dict(retStart=252, retEnd=21, volStart=252, volEnd=21, matchVol=True, mode="sharpe", removeMkt=False),
-    "return_only": dict(retStart=252, retEnd=21, volStart=252, volEnd=21, matchVol=True, mode="return", removeMkt=False),
-    "vol_only": dict(retStart=252, retEnd=21, volStart=252, volEnd=21, matchVol=True, mode="vol", removeMkt=False),
-    "split_vol": dict(retStart=252, retEnd=21, volStart=63, volEnd=1, matchVol=False, mode="sharpe", removeMkt=False),
-    "residual_sharpe": dict(retStart=252, retEnd=21, volStart=252, volEnd=21, matchVol=True, mode="sharpe", removeMkt=True),
-    "residual_return": dict(retStart=126, retEnd=21, volStart=126, volEnd=21, matchVol=True, mode="return", removeMkt=True),
+    "default": dict(retStart=252, retEnd=21, volStart=252, volEnd=21, matchVol=True, mode="sharpe", removeMkt=False, betaWindow=BW),
+    "return_only": dict(retStart=252, retEnd=21, volStart=252, volEnd=21, matchVol=True, mode="return", removeMkt=False, betaWindow=BW),
+    "vol_only": dict(retStart=252, retEnd=21, volStart=252, volEnd=21, matchVol=True, mode="vol", removeMkt=False, betaWindow=BW),
+    "split_vol": dict(retStart=252, retEnd=21, volStart=63, volEnd=1, matchVol=False, mode="sharpe", removeMkt=False, betaWindow=BW),
+    "residual_sharpe": dict(retStart=252, retEnd=21, volStart=252, volEnd=21, matchVol=True, mode="sharpe", removeMkt=True, betaWindow=BW),
+    "residual_return": dict(retStart=126, retEnd=21, volStart=126, volEnd=21, matchVol=True, mode="return", removeMkt=True, betaWindow=BW),
+    "residual_split": dict(retStart=252, retEnd=21, volStart=63, volEnd=1, matchVol=False, mode="sharpe", removeMkt=True, betaWindow=BW),
 }
 scores = {}
 for name, cfg in CONFIGS.items():
     scores[name] = {}
     for s in syms:
         r = ref.momentum_score(tk[s]["closes"], mret_all, asof, cfg)
-        scores[name][s] = None if r is None else {k: r[k] for k in ("annRet", "annVol", "score", "cum", "beta")}
+        scores[name][s] = None if r is None else {k: r[k] for k in ("annRet", "annVol", "score", "cum", "beta", "alpha")}
 
 # HRP + caps on a diversified 12-name selection across sectors
 by_sec = {}

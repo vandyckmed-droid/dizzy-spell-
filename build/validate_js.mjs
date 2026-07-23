@@ -22,7 +22,7 @@ function grab(name){
   return tpl.slice(start, i);
 }
 const NAMES = ['simpleReturns','mean','sampleStd','sharpeMomentum','momentumDaily',
-  'annualizeStats','residualize','momentumScore','covMatrix','corrFromCov',
+  'annualizeStats','olsFit','momentumScore','covMatrix','corrFromCov',
   'quasiDiagOrder','clusterVar','recursiveBisection','hrpWeights','applyCaps','pct'];
 const src = 'const TD=252;\n' + NAMES.map(grab).join('\n') +
   '\nexport {' + NAMES.join(',') + '};';
@@ -45,26 +45,22 @@ for (const [s, exp] of Object.entries(expected.sharpe)){
   chk(m && m.n === exp.n, `${s} n ${m&&m.n} vs ${exp.n}`);
 }
 
-// 1b) app-built cap-weighted market proxy must match the reference
-const pool = snap.tickers.filter(t => t.universes.includes('us_top500'));
-const totalCap = pool.reduce((a, t) => a + (t.marketCap || 0), 0) || 1;
-const mretAll = new Array(snap.dates.length - 1).fill(0);
-for (const t of pool){
-  const wgt = (t.marketCap || 0) / totalCap, c = t.closes;
-  for (let k = 0; k < mretAll.length; k++) mretAll[k] += wgt * (c[k+1]/c[k] - 1);
-}
-chk(mretAll.length === expected.market.length &&
-    mretAll.every((v, i) => close(v, expected.market[i], 1e-9)), 'market proxy matches reference');
+// 1b) the market proxy is the fixed VTI series embedded in the snapshot
+const mretAll = snap.market;
+chk(Array.isArray(mretAll) && mretAll.length === expected.market.length &&
+    mretAll.every((v, i) => close(v, expected.market[i], 1e-12)), 'VTI market series matches reference');
 
-// 1c) configurable momentum score across configs
+// 1c) configurable momentum score across configs (incl. residual with 756d beta)
 for (const [name, cfg] of Object.entries(expected.configs)){
   for (const [s, exp] of Object.entries(expected.scores[name])){
     const r = eng.momentumScore(BYSYM[s].closes, mretAll, asof, cfg);
     if (exp == null) { chk(r == null, `${name}/${s} expected null`); continue; }
     chk(r && close(r.score, exp.score, 1e-9), `${name}/${s} score ${r&&r.score} vs ${exp.score}`);
     chk(r && close(r.annRet, exp.annRet, 1e-9), `${name}/${s} annRet`);
+    chk(r && close(r.cum, exp.cum, 1e-9), `${name}/${s} cum`);
     chk(r && (exp.annVol == null ? r.annVol == null : close(r.annVol, exp.annVol, 1e-9)), `${name}/${s} annVol`);
     chk(r && (exp.beta == null ? r.beta == null : close(r.beta, exp.beta, 1e-9)), `${name}/${s} beta`);
+    chk(r && (exp.alpha == null ? r.alpha == null : close(r.alpha, exp.alpha, 1e-12)), `${name}/${s} alpha`);
   }
 }
 // default sharpe config must equal the original sharpeMomentum

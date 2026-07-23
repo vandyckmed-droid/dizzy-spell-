@@ -45,7 +45,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.path.dirname(HERE), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-HISTORY_TRADING_DAYS = 520          # embedded trailing window per ticker
+HISTORY_TRADING_DAYS = 800          # embedded trailing window (covers the 756d residual beta window)
+RECENT_MIN = 300                    # min recent valid days to be eligible (ranking/detail)
+MARKET_SYMBOL = "VTI"               # fixed market proxy for residual momentum (total US market)
 TARGET = 500                        # retained eligible companies
 CANDIDATE_HEADROOM = 850            # profiles fetched before history trim
 MAJOR_EXCHANGES = {"NASDAQ", "NYSE", "AMEX"}
@@ -203,27 +205,33 @@ def main():
             sym, d = fut.result()
             prices[sym] = d
 
-    # Build a reference trading calendar from a strong majority of tickers.
-    date_counts, parsed = {}, {}
+    # Build a reference trading calendar. Only full-history names (≥ HISTORY_TRADING_DAYS)
+    # vote on the calendar grid, but names with ≥ RECENT_MIN recent days stay eligible
+    # (their pre-listing dates are left null, so residual momentum is marked unavailable
+    # for them rather than silently computed on a short history).
+    date_counts, parsed, voters = {}, {}, 0
     for r in survivors:
         d = prices.get(r["symbol"])
-        if not isinstance(d, list) or len(d) < HISTORY_TRADING_DAYS:
+        if not isinstance(d, list) or len(d) < RECENT_MIN:
             continue
         series = {row["date"]: row.get("adjClose") for row in d
                   if row.get("adjClose") and row["adjClose"] > 0}
         parsed[r["symbol"]] = series
-        for dt in list(series)[:HISTORY_TRADING_DAYS + 40]:
-            date_counts[dt] = date_counts.get(dt, 0) + 1
+        if len(d) >= HISTORY_TRADING_DAYS:
+            voters += 1
+            for dt in list(series)[:HISTORY_TRADING_DAYS + 40]:
+                date_counts[dt] = date_counts.get(dt, 0) + 1
     if not date_counts:
-        raise RuntimeError("no usable price histories fetched")
-    quorum = max(3, int(0.6 * len(parsed)))
+        raise RuntimeError("no usable full-history price series fetched")
+    quorum = max(3, int(0.6 * voters))
     common_dates = sorted([dt for dt, c in date_counts.items() if c >= quorum],
                           reverse=True)[:HISTORY_TRADING_DAYS]
     common_dates.sort()
-    if len(common_dates) < 260:
+    if len(common_dates) < 300:
         raise RuntimeError(f"insufficient common calendar: {len(common_dates)}")
     latest = common_dates[-1]
-    print(f"  reference calendar: {len(common_dates)} days {common_dates[0]}..{latest}")
+    print(f"  reference calendar: {len(common_dates)} days {common_dates[0]}..{latest} "
+          f"({voters} full-history voters)")
 
     eligible = []
     for r in survivors:
@@ -232,31 +240,35 @@ def main():
         if not series:
             exclusions.append({"symbol": sym, "reason": "invalid_price_history"}); continue
         # staleness: must have traded on (near) the latest common date
-        if sym not in parsed or latest not in series:
-            # tolerate a 1-2 day gap only
-            recent = [d for d in common_dates[-3:] if d in series]
-            if not recent:
-                exclusions.append({"symbol": sym, "reason": "stale_price_data"}); continue
+        recent_dates = [d for d in common_dates[-3:] if d in series]
+        if not recent_dates:
+            exclusions.append({"symbol": sym, "reason": "stale_price_data"}); continue
         closes = [series.get(dt) for dt in common_dates]
-        missing = sum(1 for c in closes if not c)
-        if missing > 5:
-            exclusions.append({"symbol": sym, "reason": "insufficient_history", "missing": missing}); continue
-        if missing:
-            last = None
-            for i in range(len(closes)):
-                if closes[i]: last = closes[i]
-                elif last: closes[i] = last
-            nxt = None
-            for i in range(len(closes) - 1, -1, -1):
-                if closes[i]: nxt = closes[i]
-                elif nxt: closes[i] = nxt
-        if any(not c or c <= 0 for c in closes):
+        # forward-fill INTERNAL gaps only (a null with a prior value); leading nulls
+        # (before the name's first trade) stay null so residual is later marked N/A.
+        last = None
+        for i in range(len(closes)):
+            if closes[i]: last = closes[i]
+            elif last is not None: closes[i] = last
+        # require the recent window to be fully valid (ranking/detail need it)
+        recent = closes[-RECENT_MIN:]
+        if sum(1 for c in recent if not c) > 5:
+            exclusions.append({"symbol": sym, "reason": "insufficient_recent_history"}); continue
+        # fill any residual tiny gaps in the recent window by back-fill within it
+        nxt = None
+        for i in range(len(closes) - 1, -1, -1):
+            if closes[i]: nxt = closes[i]
+            elif nxt is not None and i >= len(closes) - RECENT_MIN: closes[i] = nxt
+        if any((c is not None and c <= 0) for c in recent):
             exclusions.append({"symbol": sym, "reason": "invalid_price_history"}); continue
-        # erroneous data: an implausible single-day move
-        bad = max(abs(closes[i] / closes[i - 1] - 1) for i in range(1, len(closes)))
+        # erroneous data: implausible single-day move (over the valid, non-null span)
+        vals = [(i, c) for i, c in enumerate(closes) if c]
+        bad = max((abs(vals[k][1] / vals[k - 1][1] - 1) for k in range(1, len(vals))
+                   if vals[k][0] == vals[k - 1][0] + 1), default=0)
         if bad > MAX_DAILY_MOVE:
             exclusions.append({"symbol": sym, "reason": "erroneous_price_move",
                                "maxMove": round(bad, 3)}); continue
+        first_valid = next((i for i, c in enumerate(closes) if c), 0)
         prof = profiles.get(sym) or {}
         eligible.append({
             "symbol": sym,
@@ -266,13 +278,28 @@ def main():
             "marketCap": r.get("marketCap") or 0,
             "exchange": r.get("exchangeShortName") or "",
             "adr": bool(prof.get("isAdr")),
-            "closes": [round(c, 3) for c in closes],
+            "histStart": first_valid,   # index of first valid close (0 = full history)
+            "closes": [round(c, 3) if c else None for c in closes],
         })
         if len(eligible) >= TARGET:
             break
 
     eligible.sort(key=lambda t: t["marketCap"], reverse=True)
     print(f"  {len(eligible)} eligible companies retained (target {TARGET})")
+
+    # ---- market proxy: fixed ETF (VTI) daily returns on the common calendar ----
+    print(f"Fetching market proxy {MARKET_SYMBOL} ...")
+    md = api("historical-price-eod/dividend-adjusted", symbol=MARKET_SYMBOL)
+    mseries = {row["date"]: row.get("adjClose") for row in md
+               if row.get("adjClose") and row["adjClose"] > 0}
+    mcloses, last = [], None
+    for dt in common_dates:
+        if dt in mseries: last = mseries[dt]
+        mcloses.append(last)
+    if any(c is None for c in mcloses):
+        raise RuntimeError(f"{MARKET_SYMBOL} missing history over the calendar")
+    market = [round(mcloses[k + 1] / mcloses[k] - 1, 6) for k in range(len(mcloses) - 1)]
+    print(f"  {MARKET_SYMBOL}: {len(market)} daily returns")
 
     # ---- universes: Top 500 + dynamic sector sub-universes ----
     sector_counts = {}
@@ -295,6 +322,9 @@ def main():
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source": "Financial Modeling Prep (stable API), split+dividend adjusted closes",
         "dates": common_dates,
+        "market": market,
+        "marketSymbol": MARKET_SYMBOL,
+        "betaWindow": 756,
         "universes": universes,
         "tickers": eligible,
         "exclusions": exclusions,

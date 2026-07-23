@@ -29,7 +29,10 @@ def momentum_daily(closes, asof, start_off, end_off):
     hi = asof - end_off
     if lo < 0 or hi >= len(closes) or hi <= lo:
         return None
-    seg = np.asarray(closes[lo:hi + 1], float)
+    seg = closes[lo:hi + 1]
+    if any(v is None or not (v > 0) for v in seg):
+        return None
+    seg = np.asarray(seg, float)
     r = seg[1:] / seg[:-1] - 1.0
     return dict(r=r, lo=lo, hi=hi, cum=float(seg[-1] / seg[0] - 1.0))
 
@@ -41,17 +44,16 @@ def annualize_stats(r):
     return dict(annRet=float(r.mean() * TD), annVol=float(r.std(ddof=1) * np.sqrt(TD)))
 
 
-def residualize(sret, mret):
-    s = np.asarray(sret, float)
-    m = np.asarray(mret, float)
-    n = min(len(s), len(m))
-    if n < 3:
+def ols_fit(y, x):
+    y = np.asarray(y, float); x = np.asarray(x, float)
+    n = min(len(y), len(x))
+    if n < 60:
         return None
-    s, m = s[:n], m[:n]
-    mm = m.mean()
-    varm = ((m - mm) ** 2).sum()
-    beta = float(((s - s.mean()) * (m - mm)).sum() / varm) if varm > 0 else 0.0
-    return dict(e=s - beta * m, beta=beta)
+    y, x = y[:n], x[:n]
+    mx, my = x.mean(), y.mean()
+    vx = ((x - mx) ** 2).sum()
+    beta = float(((y - my) * (x - mx)).sum() / vx) if vx > 0 else 0.0
+    return dict(alpha=float(my - beta * mx), beta=beta, n=n)
 
 
 def momentum_score(closes, market, asof, cfg):
@@ -63,17 +65,28 @@ def momentum_score(closes, market, asof, cfg):
     vw = momentum_daily(closes, asof, v_start, v_end)
     if cfg["mode"] != "return" and vw is None:
         return None
-    r_ret, v_ret, beta = rw["r"], (vw["r"] if vw else None), None
+    r_ret, v_ret, beta, alpha, cum = rw["r"], (vw["r"] if vw else None), None, None, rw["cum"]
     if cfg["removeMkt"]:
-        rr = residualize(rw["r"], market[rw["lo"]:rw["hi"]])
-        if rr is None:
+        bw = cfg.get("betaWindow", 756)
+        b_lo, b_hi = asof - bw, asof
+        if b_lo < 0:
             return None
-        r_ret, beta = rr["e"], rr["beta"]
-        if vw:
-            vr = residualize(vw["r"], market[vw["lo"]:vw["hi"]])
-            if vr is None:
-                return None
-            v_ret = vr["e"]
+        bseg = closes[b_lo:b_hi + 1]
+        if any(v is None or not (v > 0) for v in bseg):
+            return None
+        bseg = np.asarray(bseg, float)
+        m = np.asarray(market, float)
+        fit = ols_fit(bseg[1:] / bseg[:-1] - 1.0, m[b_lo:b_hi])
+        if fit is None:
+            return None
+        alpha, beta = fit["alpha"], fit["beta"]
+        r_ret = rw["r"] - alpha - beta * m[rw["lo"]:rw["lo"] + len(rw["r"])]
+        if vw is not None:
+            v_ret = vw["r"] - alpha - beta * m[vw["lo"]:vw["lo"] + len(vw["r"])]
+        cr = 1.0
+        for e in r_ret:
+            cr *= (1 + e)
+        cum = float(cr - 1)
     ra = annualize_stats(r_ret)
     if ra is None:
         return None
@@ -86,7 +99,7 @@ def momentum_score(closes, market, asof, cfg):
         score = ann_vol
     else:
         score = ann_ret / ann_vol if (ann_vol and ann_vol > 0) else 0.0
-    return dict(annRet=ann_ret, annVol=ann_vol, score=score, cum=rw["cum"], beta=beta)
+    return dict(annRet=ann_ret, annVol=ann_vol, score=score, cum=cum, beta=beta, alpha=alpha)
 
 
 def sharpe_momentum(closes, as_of_idx, start_off, end_off):
