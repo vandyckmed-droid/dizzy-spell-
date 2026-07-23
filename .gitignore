@@ -6,8 +6,9 @@ build/expected.json
 __pycache__/
 *.pyc
 
-# app data is a build copy of data/snapshot.json
+# app data is a build copy of data/snapshot*.json
 app/snapshot.json
+app/snapshot.lite.json
 build/rnweb/out.js
 build/rnweb/index.html
 build/snack_url.txt
