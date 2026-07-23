@@ -219,7 +219,7 @@ function Root() {
           ? <Screener C={C} snap={snap} market={market} st={st} persist={persist} query={query} setQuery={setQuery}
               onOpen={setDetail} refreshing={refreshing} onRefresh={onRefresh} />
           : tab === 'portfolio'
-          ? <Portfolio C={C} snap={snap} st={st} persist={persist} onOpen={setDetail}
+          ? <Portfolio C={C} snap={snap} market={market} st={st} persist={persist} onOpen={setDetail}
               refreshing={refreshing} onRefresh={onRefresh} />
           : <Macro C={C} snap={snap} st={st} persist={persist} refreshing={refreshing} onRefresh={onRefresh} />}
       </Animated.View>
@@ -792,9 +792,12 @@ function FilterSheet({ C, visible, onClose, st, setFilter }) {
 }
 
 /* ====================== Portfolio ====================== */
-function Portfolio({ C, snap, st, persist, onOpen, refreshing, onRefresh }) {
+function Portfolio({ C, snap, market, st, persist, onOpen, refreshing, onRefresh }) {
+  const [infoOpen, setInfoOpen] = useState(false);
   const BYSYM = useMemo(() => Object.fromEntries(snap.tickers.map(t => [t.symbol, t])), [snap]);
   const pf = useMemo(() => computePortfolio(snap, BYSYM, st), [snap, st.selected, st.asof, st.maxStock, st.maxSector, st.minStock]);
+  const guide = useMemo(() => portfolioGuidance(snap, BYSYM, st, market, pf),
+    [snap, market, pf, st.asof, st.universe, st.mode, st.removeMkt, st.start, st.end, st.sortDir, st.matchVol, st.volStart, st.volEnd]);
   const colorFor = useMemo(() => makeColorFor(), [snap]);
 
   const setCap = (key, d) => {
@@ -831,17 +834,11 @@ function Portfolio({ C, snap, st, persist, onOpen, refreshing, onRefresh }) {
         <Stat C={C} v={pf.syms.length ? (total * 100).toFixed(total > 0.9999 && total < 1.0001 ? 0 : 1) + '%' : '0%'} l="Allocated" />
         <Stat C={C} v={String(new Set(pf.syms.map(s => BYSYM[s].sector)).size)} l="Sectors" />
       </View>
-      {pf.syms.length > 0 ? (
-        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: -4, marginBottom: 12 }}>
-          <Pressable onPress={clearBasket} accessibilityLabel="Clear basket"
-            style={[styles.miniBtn, { backgroundColor: C.lossSoft, borderColor: C.loss }]}>
-            <Text style={{ color: C.loss, fontSize: 12, fontWeight: '700' }}>✕ Clear basket</Text>
-          </Pressable>
-        </View>
-      ) : null}
-
       <Card C={C}>
-        <Eyebrow C={C}>HRP constraints</Eyebrow>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Eyebrow C={C}>HRP constraints</Eyebrow>
+          <InfoDot C={C} onPress={() => setInfoOpen(true)} />
+        </View>
         <Stepper C={C} label="Max stock weight" sub="per-name cap"
           value={st.maxStock ? E.pct(st.maxStock) : 'Off'}
           onDec={() => setCap('maxStock', -1)} onInc={() => setCap('maxStock', 1)} />
@@ -851,9 +848,6 @@ function Portfolio({ C, snap, st, persist, onOpen, refreshing, onRefresh }) {
         <Stepper C={C} label="Min stock weight" sub="per-name floor · 0.5% steps" border
           value={st.minStock ? E.pct(st.minStock, 1) : 'Off'}
           onDec={() => setCap('minStock', -1)} onInc={() => setCap('minStock', 1)} />
-        <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 8, lineHeight: 16 }}>
-          Long-only Hierarchical Risk Parity on the latest 252 trading days (as-of), independent of the ranking skip window. Weights are redistributed to honor the caps and the floor and total exactly 100%.
-        </Text>
       </Card>
 
       {pf.syms.length === 0 ? (
@@ -871,6 +865,9 @@ function Portfolio({ C, snap, st, persist, onOpen, refreshing, onRefresh }) {
               </Text>
             </View>
           ) : null}
+
+          {guide ? <GuidanceCard C={C} guide={guide} holdings={pf.syms.length} BYSYM={BYSYM}
+            onOpen={onOpen} onAdd={(s) => persist(toggleSel(st, s))} onInfo={() => setInfoOpen(true)} /> : null}
 
           <Card C={C}>
             <Eyebrow C={C}>Sector allocation</Eyebrow>
@@ -911,9 +908,107 @@ function Portfolio({ C, snap, st, persist, onOpen, refreshing, onRefresh }) {
               );
             })}
           </Card>
+
+          <Pressable onPress={clearBasket} accessibilityLabel="Clear basket"
+            style={{ alignSelf: 'center', marginTop: 18, paddingHorizontal: 20, paddingVertical: 11, borderRadius: 22, backgroundColor: C.lossSoft, borderWidth: 1, borderColor: C.loss }}>
+            <Text style={{ color: C.loss, fontSize: 13, fontWeight: '700' }}>✕ Clear basket · {pf.syms.length}</Text>
+          </Pressable>
         </>
       )}
+      <PortfolioInfoSheet C={C} visible={infoOpen} onClose={() => setInfoOpen(false)} snap={snap} />
     </ScrollView>
+  );
+}
+
+// small tappable ⓘ that opens an explanation sheet
+function InfoDot({ C, onPress }) {
+  return (
+    <Pressable onPress={onPress} hitSlop={10} accessibilityLabel="What is this?"
+      style={{ width: 22, height: 22, borderRadius: 11, borderWidth: 1.3, borderColor: C.faint, alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={{ color: C.faint, fontSize: 13, fontWeight: '800', fontStyle: 'italic', marginTop: -1 }}>i</Text>
+    </Pressable>
+  );
+}
+
+function PortfolioInfoSheet({ C, visible, onClose, snap }) {
+  const bw = snap.betaWindow || 756;
+  return (
+    <Sheet C={C} visible={visible} onClose={onClose}>
+      <Text style={[styles.sheetTitle, { color: C.text }]}>How the portfolio works</Text>
+      <Text style={{ color: C.muted, fontSize: 13, lineHeight: 19, marginBottom: 12 }}>
+        Weights come from long-only <Text style={{ color: C.text, fontWeight: '700' }}>Hierarchical Risk Parity</Text> on
+        the latest 252 trading days (as-of), independent of the ranking skip window. Weights are redistributed to honor the
+        per-name caps, the sector cap and the minimum-weight floor, and total exactly 100%.
+      </Text>
+      <Text style={{ color: C.text, fontSize: 13, fontWeight: '700', marginBottom: 4 }}>Effective bets</Text>
+      <Text style={{ color: C.muted, fontSize: 13, lineHeight: 19, marginBottom: 12 }}>
+        A correlation-adjusted count of your <Text style={{ color: C.text }}>independent</Text> positions: 1 ÷ (wʹRw), using
+        the weights and the return-correlation matrix. Names that move together count as fewer bets — for a single equal-corr
+        basket it reduces to N ÷ (1 + (N−1)·ρ̄). Adding a diversifier lifts it; adding a look-alike barely moves it.
+      </Text>
+      <Text style={{ color: C.text, fontSize: 13, fontWeight: '700', marginBottom: 4 }}>How many names?</Text>
+      <Text style={{ color: C.muted, fontSize: 13, lineHeight: 19 }}>
+        There's no magic number: ~20–30 names capture most of the diversifiable-risk reduction at typical equity correlations,
+        and beyond that a momentum basket mostly dilutes its signal toward the index. Watch <Text style={{ color: C.text }}>effective
+        bets</Text> instead of the raw count — when adding names stops lifting it, you're adding redundancy, not diversification.
+      </Text>
+    </Sheet>
+  );
+}
+
+// Effective bets + a suggested add (strong + diversifying) and a trim candidate
+function GuidanceCard({ C, guide, holdings, BYSYM, onOpen, onAdd, onInfo }) {
+  const { effBets, add, trim, n } = guide;
+  const frac = effBets != null && n ? Math.max(0, Math.min(1, effBets / n)) : 0;
+  return (
+    <Card C={C}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Eyebrow C={C}>Guidance</Eyebrow>
+        <InfoDot C={C} onPress={onInfo} />
+      </View>
+      {effBets != null ? (
+        <View style={{ marginTop: 4, marginBottom: add || trim ? 12 : 0 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
+            <Text style={[TNUM, { color: C.text, fontSize: 26, fontWeight: '800', letterSpacing: -0.5 }]}>{effBets.toFixed(1)}</Text>
+            <Text style={{ color: C.muted, fontSize: 13 }}>effective bets · {holdings} holdings</Text>
+          </View>
+          <View style={{ height: 6, borderRadius: 3, backgroundColor: C.surface2, marginTop: 8, overflow: 'hidden' }}>
+            <View style={{ width: `${frac * 100}%`, height: '100%', borderRadius: 3, backgroundColor: C.div }} />
+          </View>
+          <Text style={{ color: C.faint, fontSize: 11, marginTop: 6 }}>correlation-adjusted independent positions</Text>
+        </View>
+      ) : null}
+      {add ? (
+        <GuidanceRow C={C} tone="add" label="Add" sym={add.sym} name={BYSYM[add.sym] ? BYSYM[add.sym].name : ''}
+          note={`diversifies · ρ ${add.rho.toFixed(2)}`} onOpen={() => onOpen(add.sym)}
+          action="+" onAction={() => onAdd(add.sym)} border={effBets != null} />
+      ) : null}
+      {trim ? (
+        <GuidanceRow C={C} tone="trim" label="Trim" sym={trim.sym} name={BYSYM[trim.sym] ? BYSYM[trim.sym].name : ''}
+          note={`≈ ${trim.twin} · ρ ${trim.rho.toFixed(2)} · weaker`} onOpen={() => onOpen(trim.sym)}
+          action="×" onAction={() => onAdd(trim.sym)} border />
+      ) : null}
+    </Card>
+  );
+}
+
+function GuidanceRow({ C, tone, label, sym, name, note, onOpen, action, onAction, border }) {
+  const accent = tone === 'add' ? C.div : C.loss;
+  const soft = tone === 'add' ? C.divSoft : C.lossSoft;
+  return (
+    <View style={[styles.ctlRow, border && { borderTopColor: C.line, borderTopWidth: 1 }]}>
+      <Pressable style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 0 }} onPress={onOpen}>
+        <Text style={{ color: accent, fontSize: 10.5, fontWeight: '800', letterSpacing: 0.4, textTransform: 'uppercase', width: 34 }}>{label}</Text>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={{ color: C.text, fontSize: 15, fontWeight: '800' }}>{sym}</Text>
+          <Text numberOfLines={1} style={[TNUM, { color: C.faint, fontSize: 11.5, marginTop: 1 }]}>{note}</Text>
+        </View>
+      </Pressable>
+      <Pressable onPress={onAction} hitSlop={8} accessibilityLabel={`${label} ${sym}`}
+        style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: soft, borderWidth: 1, borderColor: accent, alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{ color: accent, fontSize: 20, fontWeight: '700', marginTop: -2 }}>{action}</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -948,6 +1043,86 @@ function computePortfolio(snap, BYSYM, st) {
   const sectors = syms.map(s => BYSYM[s].sector);
   const capped = E.applyCaps(w, sectors, st.maxStock, st.maxSector, st.minStock);
   return { syms, weights: capped.w, feasible: capped.feasible, msg: capped.msg, sectors };
+}
+
+// Selection guidance from data we already compute: a correlation-adjusted
+// "effective bets" count (1/wʹRw), plus a suggested add (a strong momentum name
+// that diversifies the basket) and a trim candidate (the weaker half of the most
+// redundant pair). Correlations over the latest 252d ending at as-of.
+function portfolioGuidance(snap, BYSYM, st, market, pf) {
+  const syms = pf.syms;
+  if (!syms || syms.length < 2) return null;
+  const hi = st.asof, lo = Math.max(0, hi - 252);
+  if (hi - lo < 20) return null;
+  const dir = st.sortDir === 'asc' ? -1 : 1;           // higher goodness = better rank
+  const cfg = cfgOf(st, snap.betaWindow || 756);
+  const scoreCache = {};
+  const scoreOf = (sym) => {
+    if (sym in scoreCache) return scoreCache[sym];
+    const r = E.momentumScore(BYSYM[sym].closes, market, st.asof, cfg);
+    const s = r && r.score != null && !Number.isNaN(r.score) ? r.score : null;
+    return (scoreCache[sym] = s);
+  };
+  const good = (sym) => { const s = scoreOf(sym); return s == null ? null : dir * s; };
+
+  // demeaned return vectors for the basket
+  const vec = syms.map(s => demeanedReturns(BYSYM[s].closes, lo, hi));
+  const idx = []; for (let i = 0; i < syms.length; i++) if (vec[i]) idx.push(i);
+  const corr = (a, b) => {
+    const va = vec[a].d, vb = vec[b].d; let dot = 0;
+    for (let k = 0; k < va.length; k++) dot += va[k] * vb[k];
+    return dot / Math.sqrt(vec[a].ss * vec[b].ss);
+  };
+
+  // effective bets = 1 / (wʹRw), weights renormalized over names with a vector
+  let effBets = null;
+  if (idx.length >= 2) {
+    let wsum = 0; for (const i of idx) wsum += pf.weights[i];
+    const w = idx.map(i => pf.weights[i] / (wsum || 1));
+    let q = 0;
+    for (let a = 0; a < idx.length; a++)
+      for (let b = 0; b < idx.length; b++)
+        q += w[a] * w[b] * (a === b ? 1 : corr(idx[a], idx[b]));
+    effBets = q > 0 ? 1 / q : idx.length;
+  }
+
+  // trim: the weaker-scoring half of the most correlated held pair (if genuinely redundant)
+  let trim = null, hi2 = 0.6;
+  for (let a = 0; a < idx.length; a++)
+    for (let b = a + 1; b < idx.length; b++) {
+      const c = corr(idx[a], idx[b]);
+      if (c > hi2) {
+        hi2 = c;
+        const sa = syms[idx[a]], sb = syms[idx[b]];
+        const ga = good(sa), gb = good(sb);
+        const weaker = (gb == null || (ga != null && ga <= gb)) ? sa : sb;
+        trim = { sym: weaker, twin: weaker === sa ? sb : sa, rho: c };
+      }
+    }
+
+  // suggested add: among the top-ranked unselected names, the one that diversifies most
+  const sel = new Set(st.selected);
+  const scored = [];
+  for (const t of snap.tickers) {
+    if (sel.has(t.symbol) || !t.universes.includes(st.universe)) continue;
+    const g = good(t.symbol);
+    if (g != null) scored.push({ sym: t.symbol, g });
+  }
+  scored.sort((x, y) => y.g - x.g);
+  let add = null, lowRho = 2;
+  for (const cand of scored.slice(0, 40)) {
+    const v = demeanedReturns(BYSYM[cand.sym].closes, lo, hi);
+    if (!v) continue;
+    let mx = -2, twin = null;
+    for (const i of idx) {
+      const va = vec[i].d, vb = v.d; let dot = 0;
+      for (let k = 0; k < va.length; k++) dot += va[k] * vb[k];
+      const c = dot / Math.sqrt(vec[i].ss * v.ss);
+      if (c > mx) { mx = c; twin = syms[i]; }
+    }
+    if (mx < lowRho) { lowRho = mx; add = { sym: cand.sym, score: scoreOf(cand.sym), rho: mx, twin }; }
+  }
+  return { effBets, trim, add, n: idx.length };
 }
 
 /* ====================== Ticker detail ====================== */

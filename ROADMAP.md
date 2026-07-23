@@ -38,7 +38,11 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 - 🟡 Per-stock / per-sector **caps** + a per-stock **minimum weight** (0.5% steps, default off),
   redistributed to exactly 100% with correct **joint feasibility** (caps + floor solved together)
   and guidance when infeasible.
-- 🟢 Sector allocation bar; **Clear basket**.
+- 🟢 Sector allocation bar; **Clear basket** (moved to the bottom).
+- 🟡 **Selection guidance** — a Guidance card with **effective bets** (`1/wʹRw`, correlation-adjusted
+  count of independent positions), a **suggested add** (top-ranked name that diversifies the basket),
+  and a **trim candidate** (weaker half of the most redundant pair), each one-tap actionable.
+- 🟢 Explanatory text tucked behind an **ⓘ** (HRP + effective-bets + "how many names" in a sheet).
 
 ### Ticker detail
 - 🟢 Company logo, sector tag (tappable → that sector's universe).
@@ -92,7 +96,8 @@ Feasible, **🟡 medium** (~150–200 lines, no engine changes). Design:
 ### Weighting & risk
 - 🟡 Compare weighting schemes (HRP vs equal / inverse-vol / min-variance)
 - 🟡 Portfolio backtest line (weighted-basket cumulative return, vol, max drawdown)
-- 🟡 Correlation heatmap + diversification stats (effective number of bets)
+- 🟡 Correlation heatmap (effective bets already shipped on the Portfolio)
+- 🟢 Swipe-to-select / swipe-to-hide rows on the Screener (with a reset) — under consideration
 - 🟢 More constraints (max holdings / cardinality, per-sector minimums)
 
 ### Macro
