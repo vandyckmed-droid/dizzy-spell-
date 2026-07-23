@@ -90,6 +90,16 @@ for (let i = 0; i < sel.length; i++)
   chk(close(cap.w[i], expected.caps.weights[i], 1e-7), `cap ${sel[i]} ${cap.w[i]} vs ${expected.caps.weights[i]}`);
 chk(Math.max(...cap.w) <= expected.caps.maxStock + 1e-9, 'stock cap respected');
 
+// 3b) Constraint caps with a minimum-weight floor
+const cm = expected.capsMin;
+const capm = eng.applyCaps(w, secs, cm.maxStock, cm.maxSector, cm.minStock);
+chk(capm.feasible === cm.feasible, 'capsMin feasibility');
+chk(close(capm.w.reduce((a,b)=>a+b,0), 1, 1e-12), 'capsMin sums to exactly 1');
+for (let i = 0; i < sel.length; i++)
+  chk(close(capm.w[i], cm.weights[i], 1e-7), `capMin ${sel[i]} ${capm.w[i]} vs ${cm.weights[i]}`);
+chk(Math.min(...capm.w) >= cm.minStock - 1e-9, 'min floor respected');
+chk(Math.max(...capm.w) <= cm.maxStock + 1e-9, 'capsMin stock cap respected');
+
 // 4) Determinism
 const w2 = eng.hrpWeights(R);
 chk(w.every((x,i)=>x===w2[i]), 'HRP deterministic');

@@ -55,6 +55,8 @@ R = hist[1:] / hist[:-1] - 1
 w = ref.hrp_weights(R)
 secs = [tk[s]["sector"] for s in sel]
 wc, ok, _ = ref.apply_caps(w, secs, max_stock=0.15, max_sector=0.45)
+# min-weight floor case (5% floor binds on the smaller HRP weights)
+wm, okm, _ = ref.apply_caps(w, secs, max_stock=0.15, max_sector=0.45, min_stock=0.05)
 
 out = {
     "asof": asof,
@@ -66,6 +68,8 @@ out = {
     "hrp_weights": [float(x) for x in w],
     "caps": {"maxStock": 0.15, "maxSector": 0.45,
              "weights": [float(x) for x in wc], "feasible": bool(ok)},
+    "capsMin": {"maxStock": 0.15, "maxSector": 0.45, "minStock": 0.05,
+                "weights": [float(x) for x in wm], "feasible": bool(okm)},
 }
 json.dump(out, open("build/expected.json", "w"), indent=0)
 print(f"dumped expected.json: {len(sm)} sharpe rows, {len(CONFIGS)} score configs, HRP on {len(sel)} names")

@@ -45,11 +45,13 @@ for(let trial=0; trial<200; trial++){
   const secs=pick.map(t=>t.sector);
   const ms=[0,0.15,0.20,0.30][Math.floor(rand()*4)];
   const mv=[0,0.30,0.45,0.60][Math.floor(rand()*4)];
-  const c=E.applyCaps(w, secs, ms, mv);
+  const mn=[0,0.01,0.02,0.03][Math.floor(rand()*4)];
+  const c=E.applyCaps(w, secs, ms, mv, mn);
   if(!c.feasible){ infeasSeen++; continue; }
   const sum=c.w.reduce((a,b)=>a+b,0);
   worst=Math.max(worst, Math.abs(sum-1));
   if(ms>0) ok(Math.max(...c.w)<=ms+1e-7, `trial ${trial} stock cap ${ms} violated max=${Math.max(...c.w)}`);
+  if(mn>0) ok(Math.min(...c.w)>=mn-1e-7, `trial ${trial} min weight ${mn} violated min=${Math.min(...c.w)}`);
   if(mv>0){ for(const s of new Set(secs)){ let st=0; c.w.forEach((wi,ii)=>{if(secs[ii]===s)st+=wi;}); ok(st<=mv+1e-6,`trial ${trial} sector cap ${mv} violated ${s}=${st}`);} }
 }
 ok(worst<1e-9, '200 random portfolios normalize to exactly 100% (worst dev '+worst.toExponential(2)+')');
