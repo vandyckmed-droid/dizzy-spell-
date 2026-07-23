@@ -29,7 +29,9 @@ RAW = f"https://raw.githubusercontent.com/{REPO}/refs/heads/{branch}"
 FILES = {
     "App.js": "app/App.js",
     "engine.js": "app/engine.js",
-    "snapshot.json": "data/snapshot.json",
+    # light snapshot for instant first paint; the full history is background-fetched
+    # by the app from the raw `data/snapshot.json` URL (see DATA_URL in App.js)
+    "snapshot.lite.json": "data/snapshot.lite.json",
     "package.json": "app/package.json",
     "app.json": "app/app.json",
 }

@@ -61,6 +61,12 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 - 🟢 Static HTML artifact twin shares the validated engine.
 - 🟡 Numerics cross-checked vs a NumPy reference — `validate_js.mjs` (1007) + `verify_edge.mjs` (1317).
 - 🟢 Headless react-native-web render harness (Screener / Portfolio / Markets / detail, zero errors).
+- 🟡 **Fast first paint** — the app loads a **light snapshot** (recent ~300 days, `snapshot.lite.json`,
+  ~557 KB gzipped vs 1.25 MB full) for instant render, then background-fetches the full 800-day
+  history and hot-swaps it in (as-of persists by date, so the swap is seamless). Residual momentum
+  shows "loading" until the full history lands.
+- 🟢 Delivery as a **single stable, auto-updating Snack** (external raw refs on `main`, gzipped from
+  GitHub's CDN, cached across opens) instead of a fresh frozen inline Snack per change.
 
 ---
 
@@ -102,6 +108,6 @@ Feasible, **🟡 medium** (~150–200 lines, no engine changes). Design:
 ---
 
 ## Notes
-- Intraday is a **build-time** layer (the app is key-free) — refreshed by re-running
-  `fetch_data.py` + `fetch_intraday.py`. Intraday isn't baked for all 600 (size).
+- Data refresh (key-free, build-time): `fetch_data.py` → `fetch_intraday.py` → **`make_light.py`**
+  (regenerates the light snapshot from the full). Intraday isn't baked for all 600 (size).
 - The HTML artifact twin keeps the pre-Robinhood theme; the app is the primary surface.

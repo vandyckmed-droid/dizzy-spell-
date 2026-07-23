@@ -16,10 +16,13 @@ import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path, Defs, LinearGradient, Stop, Line, Circle, Rect, Text as SvgText } from 'react-native-svg';
 import * as E from './engine';
-import snapshot from './snapshot.json';   // bundled, key-free market-data snapshot
+// First paint loads a LIGHT snapshot (recent ~300 days, marked partial); the full
+// 800-day history is fetched in the background and hot-swapped in (see Root).
+import snapshot from './snapshot.lite.json';
 
 const STORE_KEY = 'sms.state.v1';
-// Latest snapshot on the public repo — used by pull-to-refresh (bundled copy is the fallback).
+// Full 800-day snapshot on the public repo — background-hydrated on launch and
+// re-pulled by pull-to-refresh. The bundled light copy is the instant fallback.
 const DATA_URL =
   'https://raw.githubusercontent.com/vandyckmed-droid/dizzy-spell-/refs/heads/main/data/snapshot.json';
 
@@ -156,6 +159,25 @@ function Root() {
 
   // re-clamp when the snapshot changes (e.g. after refresh)
   useEffect(() => { setSt(s => (s ? clampState(s, snap) : s)); }, [snap]);
+
+  // background-hydrate the full history after first paint, then hot-swap it in.
+  // The as-of is persisted by DATE, so the light→full calendar change is seamless.
+  useEffect(() => {
+    if (!snapshot.partial) return;                 // already the full snapshot
+    let cancelled = false;
+    (async () => {
+      try {
+        const url = DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + 't=' + Date.now();
+        const res = await fetch(url, { cache: 'no-store' });
+        if (res.ok) {
+          const full = await res.json();
+          if (!cancelled && full && Array.isArray(full.tickers) && full.tickers.length && !full.partial)
+            setSnap(full);
+        }
+      } catch (e) {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // fade the main content in on tab change
   useEffect(() => {
@@ -491,7 +513,9 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
         data={displayed}
         keyExtractor={(o) => o.t.symbol}
         ListHeaderComponent={header}
-        ListEmptyComponent={<Text style={{ color: C.muted, textAlign: 'center', paddingVertical: 40 }}>No matches for this filter.</Text>}
+        ListEmptyComponent={<Text style={{ color: C.muted, textAlign: 'center', paddingVertical: 40 }}>
+          {st.removeMkt && snap.partial ? 'Loading full history for residual momentum…' : 'No matches for this filter.'}
+        </Text>}
         contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 96 }}
         keyboardShouldPersistTaps="handled"
         initialNumToRender={14} maxToRenderPerBatch={16} windowSize={10} removeClippedSubviews
@@ -712,7 +736,11 @@ function ScoreNote({ C, snap, st }) {
   return (
     <View>
       <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 10, lineHeight: 16 }}>{base}{resid}</Text>
-      {noHist ? (
+      {st.removeMkt && snap.partial ? (
+        <Text style={{ color: C.div, fontSize: 11.5, marginTop: 6, fontWeight: '600' }}>
+          ⏳ Full history is loading — residual momentum will populate in a moment.
+        </Text>
+      ) : noHist ? (
         <Text style={{ color: C.loss, fontSize: 11.5, marginTop: 6, fontWeight: '600' }}>
           ⚠︎ Residual momentum needs {bw} trading days before the as-of date — move the as-of later.
         </Text>
@@ -1508,6 +1536,7 @@ function AppHeader({ C, snap }) {
       </View>
       <Text style={{ color: C.faint, fontSize: 12, marginTop: 4 }}>
         {snap.counts?.eligible ?? snap.tickers.length} names · adj. close · as of {when}
+        {snap.partial ? <Text style={{ color: C.div }}>  · syncing full history…</Text> : null}
       </Text>
     </View>
   );
