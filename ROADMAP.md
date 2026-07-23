@@ -29,8 +29,10 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 - 🟡 **Correlation-to-basket cue** — as you scroll, redundant names (high ρ vs a held name) fade and
   show their nearest twin; diversifiers (low ρ) get a teal dot & add button. Thresholds are
   **user-configurable** (default: diversify < 0.45, redundant ≥ 0.60) via the cue sheet.
-- 🟢 Sort & filter (market-cap band, exchange); one-tap selection persisted **by date**
-  (survives snapshot rebuilds).
+- 🟢 Sort & filter (market-cap band, exchange); selection persisted **by date** (survives rebuilds).
+- 🟢 **Slide-to-select** rows (swipe → toggles; tap opens detail; selected shown by an accent bar) —
+  replaced the checkmark button. Dual windows render as **two clean color-coded scores** (separate)
+  or one blended score (blend), with a color legend at the top instead of per-row labels.
 
 ### Portfolio & weighting
 - 🟡 Long-only **HRP** (stabilized corr → √((1−ρ)/2) → average linkage → quasi-diagonalization →
@@ -97,7 +99,7 @@ Feasible, **🟡 medium** (~150–200 lines, no engine changes). Design:
 - 🟡 Compare weighting schemes (HRP vs equal / inverse-vol / min-variance)
 - 🟡 Portfolio backtest line (weighted-basket cumulative return, vol, max drawdown)
 - 🟡 Correlation heatmap (effective bets already shipped on the Portfolio)
-- 🟢 Swipe-to-select / swipe-to-hide rows on the Screener (with a reset) — under consideration
+- 🟢 Swipe-to-hide rows on the Screener (with a reset) — deferred; slide-to-select shipped
 - 🟢 More constraints (max holdings / cardinality, per-sector minimums)
 
 ### Macro
