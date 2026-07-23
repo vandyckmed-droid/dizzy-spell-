@@ -22,8 +22,9 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 - 🟡 **Configurable score** — return window (as-of / start / end), rank by **Return / Volatility /
   Sharpe**, optional separate volatility window.
 - 🟢 **Default 12–1 window = 250 → 20** (rounded; absorbs EOD lag) with a one-tap **↺ 12–1 reset** chip.
-- 🟡 **Second return window** (default **6–1**) — **Blend** the two into one score, or show them
-  **Separate** side-by-side. Dynamic month labels (e.g. 12–1 / 6–1).
+- 🟡 **Second return window** (default **6–1**) — when on, it **blends 50/50** with the primary
+  window into one ranking score. Both windows are annualized first, so a shorter and a longer window
+  sit on the same per-year scale and combine fairly. Dynamic month labels (e.g. 12–1 / 6–1).
 - 🟡 **Residual momentum** — OLS α, β over the trailing 756 days vs a fixed ETF (VTI); true residuals
   `e = r − α − β·m` over the chosen window; short-history names marked n/a.
 - 🟡 **Correlation-to-basket cue** — as you scroll, redundant names (high ρ vs a held name) fade and
@@ -35,6 +36,10 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
   (teal when the name diversifies, filled green once held). Dual windows render as **two clean
   color-coded scores** (separate) or one blended score (blend), with a color legend at the top
   instead of per-row labels. (Tried swipe- and tap-to-select; the checkmark won.)
+- 🟡 **Saved books** — holdings live in named books, each a **portfolio** (HRP-weighted) or a
+  **watchlist** (unweighted, momentum-ranked). Switcher + ＋New + a manage sheet (rename / switch
+  type / delete) on the Portfolio; an "Adding to … · Switch" chip on the Screener. Ranking settings
+  stay global; only holdings are per-book. Old single basket migrates into book #1.
 
 ### Portfolio & weighting
 - 🟡 Long-only **HRP** (stabilized corr → √((1−ρ)/2) → average linkage → quasi-diagonalization →
@@ -80,25 +85,16 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 
 ## ⬜ Candidate — next
 
-### 🎯 Next up — multiple saved books (2nd portfolio / watchlist)
-Feasible, **🟡 medium** (~150–200 lines, no engine changes). Design:
-- Persist a `books` array — each `{ id, name, kind: 'portfolio' | 'watchlist', selected: [...] }` —
-  plus an `activeBook` id. Migration: the current single `selected` becomes book #1.
-- A **book switcher** (pills + "＋ New") on the Portfolio (and a compact active-book chip on the
-  Screener). Add / rename / delete / switch; long-press for rename/kind.
-- **Portfolio** books get HRP + caps + floor (today's view). **Watchlist** books are an unweighted
-  tracked list (momentum score + day change, no HRP) — lighter, for names you're eyeing.
-- Everything that reads `selected` (screener add/remove, basket cue, tab badge, HRP) routes through
-  the active book via two helpers (`activeSelected` / `setSelected`) to keep the change surface small.
-- Ranking window / score / chart settings stay **global**; only holdings are per-book. (Per-book caps
-  are a later nicety.)
+### 🎯 Next up — compare weighting schemes
+Show HRP next to **equal-weight, inverse-vol, and long-only min-variance** for the same book, so you
+can see what HRP buys you (concentration, effective bets, portfolio vol). Needs 3 new engine functions
++ a shared matrix inverse, each cross-checked against the NumPy reference before it ships.
 
 ### Ranking
 - 🟡 Sector-relative ranking (rank within sector)
 - 🟡 Adjustable A/B blend weight (instead of 50/50); value / quality as a third input
 
 ### Weighting & risk
-- 🟡 Compare weighting schemes (HRP vs equal / inverse-vol / min-variance)
 - 🟡 Portfolio backtest line (weighted-basket cumulative return, vol, max drawdown)
 - 🟡 Correlation heatmap (effective bets already shipped on the Portfolio)
 - 🟢 Swipe-to-hide rows on the Screener (with a reset) — deferred; checkmark select shipped
