@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, FlatList, Pressable, TextInput, Modal, RefreshControl, Switch, Alert, Image,
-  StyleSheet, useColorScheme, Animated, Easing, LayoutAnimation, Platform, UIManager, PanResponder,
+  StyleSheet, useColorScheme, Animated, Easing, LayoutAnimation, Platform, UIManager,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -508,7 +508,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
             </View>
           </View>
         ) : <View />}
-        <Text style={{ color: C.faint, fontSize: 11 }}>swipe a row → to select</Text>
+        <Text style={{ color: C.faint, fontSize: 11 }}>tap to select · › for detail</Text>
       </View>
       {st.selected.length ? (
         <Pressable onPress={() => setCueOpen(true)} accessibilityLabel="Basket cue settings"
@@ -610,42 +610,10 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
   const vol = m.annVol != null ? E.pct(m.annVol, 0) : '—';
   const rp = (removeMkt ? 'α ' : '');   // α = residual (market-neutral) return
 
-  // slide-to-select: a right drag toggles selection; a plain tap opens the detail;
-  // vertical drags fall through to list scroll. A PanResponder (capture phase) grabs
-  // a horizontal drag from the inner Pressable and holds it against the list scroller.
-  // Everything mid-gesture — the row translate, the action reveal, the icon pop — is
-  // driven off one Animated value, so there are no re-renders while dragging. The row
-  // tracks the finger 1:1 to the commit point, then meets progressive resistance; a
-  // soft haptic tick fires the instant it arms, and it commits on cross OR a fast flick.
-  const pan = useRef(new Animated.Value(0)).current;
-  const armed = useRef(false);
-  const selRef = useRef(selected); selRef.current = selected;
-  const toggleRef = useRef(onToggle); toggleRef.current = onToggle;
-  const THRESH = 64, MAX = 112;   // commit point · rubber-band ceiling
-  const settle = () => Animated.spring(pan, { toValue: 0, useNativeDriver: false, tension: 150, friction: 13 }).start();
-  const responder = useRef(PanResponder.create({
-    onMoveShouldSetPanResponderCapture: (e, gs) => gs.dx > 8 && gs.dx > Math.abs(gs.dy) * 1.4,
-    onPanResponderTerminationRequest: () => false,
-    onPanResponderGrant: () => { armed.current = false; },
-    onPanResponderMove: (e, gs) => {
-      const dx = Math.max(0, gs.dx);
-      // 1:1 up to the commit point, then a stiffening rubber band toward MAX
-      pan.setValue(dx <= THRESH ? dx : Math.min(MAX, THRESH + (dx - THRESH) * 0.32));
-      const past = dx >= THRESH;
-      if (past !== armed.current) { armed.current = past; haptic(past ? 'select' : 'light'); }
-    },
-    onPanResponderRelease: (e, gs) => {
-      const dx = Math.max(0, gs.dx);
-      const commit = dx >= THRESH || (dx > 24 && gs.vx > 0.5);   // crossed OR fast flick
-      if (commit) { haptic(selRef.current ? 'warn' : 'success'); toggleRef.current(); }
-      settle();
-    },
-    onPanResponderTerminate: settle,
-  })).current;
-  // reveal ramps in smoothly; the label leads with a hint of parallax and pops on arm
-  const revealOpacity = pan.interpolate({ inputRange: [0, 8, THRESH], outputRange: [0, 0.32, 1], extrapolate: 'clamp' });
-  const labelShift = pan.interpolate({ inputRange: [0, THRESH], outputRange: [-12, 0], extrapolate: 'clamp' });
-  const iconScale = pan.interpolate({ inputRange: [THRESH - 20, THRESH, MAX], outputRange: [0.8, 1, 1.14], extrapolate: 'clamp' });
+  // tap-to-select: a tap anywhere on the row adds/removes it (selection is the
+  // high-frequency action, so it gets the cheapest gesture — a single tap, with a
+  // light haptic tick and the accent bar / row tint for feedback). The stock detail
+  // moves to a trailing › chevron, which grabs its own tap so it never toggles.
 
   // right column: two clean color-coded scores (separate), one blended score
   // (blend), or a single score + context (single window)
@@ -676,35 +644,38 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
     );
   }
   return (
-    <View style={{ borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line, overflow: 'hidden' }}>
-      <Animated.View pointerEvents="none"
-        style={[StyleSheet.absoluteFill, { flexDirection: 'row', alignItems: 'center', paddingLeft: 22, backgroundColor: selected ? C.lossSoft : C.divSoft, opacity: revealOpacity }]}>
-        <Animated.Text style={{ color: selected ? C.loss : C.div, fontSize: 13.5, fontWeight: '800', letterSpacing: 0.2, transform: [{ translateX: labelShift }, { scale: iconScale }] }}>
-          {selected ? '✕  Remove' : '＋  Add'}
-        </Animated.Text>
-      </Animated.View>
-      <Animated.View {...responder.panHandlers} dataSet={{ swipe: t.symbol }}
-        style={{ transform: [{ translateX: pan }], backgroundColor: selected ? C.selRow : C.ground, flexDirection: 'row', alignItems: 'stretch' }}>
-        <View style={{ width: 3, backgroundColor: selected ? C.accent : 'transparent' }} />
-        <Pressable style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 15, paddingHorizontal: 10, minWidth: 0, opacity: cue.opacity }}
-          onPress={onOpen} hitSlop={4}>
-          <Text style={[styles.rank, { color: selected ? C.accent : C.faint }]}>{rank}</Text>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Text style={[styles.tick, { color: C.text }]}>{t.symbol}</Text>
-              {cue.kind === 'div' ? <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: C.div }} /> : null}
-            </View>
-            <Text numberOfLines={1} style={[styles.cname, { color: C.muted }]}>{t.name}</Text>
-            <Text numberOfLines={1} style={[styles.csec, { color: C.faint }]}>
-              {t.sector}
-              {cue.kind === 'redundant' ? <Text style={{ color: C.muted }}>{`  ≈ ${cue.twin}`}</Text> : null}
-              {cue.kind === 'div' ? <Text style={{ color: C.div }}>  diversifies</Text> : null}
-            </Text>
+    <Pressable dataSet={{ swipe: t.symbol }}
+      onPress={() => { haptic(selected ? 'light' : 'select'); onToggle(); }}
+      accessibilityRole="button" accessibilityState={{ selected }}
+      accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${t.symbol}`}
+      style={({ pressed }) => ({
+        borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line,
+        backgroundColor: pressed ? C.surface2 : (selected ? C.selRow : C.ground),
+        flexDirection: 'row', alignItems: 'stretch',
+      })}>
+      <View style={{ width: 3, backgroundColor: selected ? C.accent : 'transparent' }} />
+      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 15, paddingLeft: 10, paddingRight: 2, minWidth: 0, opacity: cue.opacity }}>
+        <Text style={[styles.rank, { color: selected ? C.accent : C.faint }]}>{rank}</Text>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={[styles.tick, { color: C.text }]}>{t.symbol}</Text>
+            {cue.kind === 'div' ? <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: C.div }} /> : null}
           </View>
-          {right}
+          <Text numberOfLines={1} style={[styles.cname, { color: C.muted }]}>{t.name}</Text>
+          <Text numberOfLines={1} style={[styles.csec, { color: C.faint }]}>
+            {t.sector}
+            {cue.kind === 'redundant' ? <Text style={{ color: C.muted }}>{`  ≈ ${cue.twin}`}</Text> : null}
+            {cue.kind === 'div' ? <Text style={{ color: C.div }}>  diversifies</Text> : null}
+          </Text>
+        </View>
+        {right}
+        <Pressable onPress={onOpen} hitSlop={12} accessibilityRole="button"
+          accessibilityLabel={`${t.symbol} details`}
+          style={({ pressed }) => ({ paddingHorizontal: 8, paddingVertical: 10, marginLeft: 2, opacity: pressed ? 0.45 : 1 })}>
+          <Text style={{ color: C.faint, fontSize: 21, fontWeight: '400', lineHeight: 22 }}>›</Text>
         </Pressable>
-      </Animated.View>
-    </View>
+      </View>
+    </Pressable>
   );
 }
 
