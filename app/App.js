@@ -14,7 +14,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Svg, { Path, Defs, LinearGradient, Stop, Line, Circle, Rect } from 'react-native-svg';
+import Svg, { Path, Defs, LinearGradient, Stop, Line, Circle, Rect, Text as SvgText } from 'react-native-svg';
 import * as E from './engine';
 import snapshot from './snapshot.json';   // bundled, key-free market-data snapshot
 
@@ -85,6 +85,8 @@ const CAP_BANDS = [
   { key: 'mid', label: '< $100B', test: mc => mc < 100e9 },
 ];
 const EXCHANGES = ['NYSE', 'NASDAQ', 'AMEX'];
+
+const shortDate = (iso) => { const [y, m, d] = iso.split('-'); return `${+m}/${+d}/${y.slice(2)}`; };
 
 const haptic = (kind = 'select') => {
   try {
@@ -865,6 +867,12 @@ function ScrubChart({ C, snap, ticker, st }) {
             {winHi > winLo ? (
               <Rect x={X(winLo)} y={padTop - 4} width={Math.max(1, X(winHi) - X(winLo))} height={H - padTop - padBot + 8}
                 fill={C.accentSoft} stroke={C.accent} strokeOpacity="0.35" strokeWidth="1" rx="3" />
+            ) : null}
+            {winHi > winLo ? (
+              <SvgText x={X(winLo) + 2} y={H - 3} fontSize="9" fontWeight="600" fill={C.accent} textAnchor="start">{shortDate(dates[winLo])}</SvgText>
+            ) : null}
+            {winHi > winLo ? (
+              <SvgText x={X(winHi) - 2} y={H - 3} fontSize="9" fontWeight="600" fill={C.accent} textAnchor="end">{shortDate(dates[winHi])}</SvgText>
             ) : null}
             <Path d={area} fill="url(#cg)" />
             <Path d={line} stroke={col} strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" />
