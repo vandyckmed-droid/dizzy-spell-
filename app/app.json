@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "Momentum Screener",
+    "slug": "momentum-screener",
+    "sdkVersion": "57.0.0",
+    "platforms": ["ios", "android"],
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "primaryColor": "#e8b24a"
+  }
+}

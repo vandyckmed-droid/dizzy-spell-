@@ -1,0 +1,939 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="color-scheme" content="dark light">
+<title>Sharpe Momentum Screener</title>
+<style>
+/* ============================ Design tokens ============================ */
+:root{
+  --ground:#0b1220; --surface:#151e2e; --surface-2:#1c2740; --raised:#22304d;
+  --line:rgba(255,255,255,.08); --line-strong:rgba(255,255,255,.14);
+  --text:#eaeef5; --muted:#93a0b8; --faint:#65728c;
+  --accent:#e8b24a; --accent-ink:#231a06; --accent-soft:rgba(232,178,74,.14);
+  --gain:#2fb574; --gain-soft:rgba(47,181,116,.14);
+  --loss:#f0524a; --loss-soft:rgba(240,82,74,.14);
+  --chip:#22304d; --shadow:0 8px 30px rgba(0,0,0,.35);
+  --r-lg:20px; --r-md:14px; --r-sm:10px;
+  --safe-top:env(safe-area-inset-top,0px); --safe-bottom:env(safe-area-inset-bottom,0px);
+  --tabbar-h:64px;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --ground:#f4f6f9; --surface:#ffffff; --surface-2:#f0f3f8; --raised:#e8edf5;
+    --line:rgba(16,26,48,.09); --line-strong:rgba(16,26,48,.16);
+    --text:#101a2c; --muted:#5a6a86; --faint:#8b97ad;
+    --accent:#b7791f; --accent-ink:#fff6e2; --accent-soft:rgba(183,121,31,.12);
+    --gain:#1f9d63; --gain-soft:rgba(31,157,99,.12);
+    --loss:#d63a34; --loss-soft:rgba(214,58,52,.12);
+    --chip:#e8edf5; --shadow:0 6px 22px rgba(20,32,58,.10);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0b1220; --surface:#151e2e; --surface-2:#1c2740; --raised:#22304d;
+  --line:rgba(255,255,255,.08); --line-strong:rgba(255,255,255,.14);
+  --text:#eaeef5; --muted:#93a0b8; --faint:#65728c;
+  --accent:#e8b24a; --accent-ink:#231a06; --accent-soft:rgba(232,178,74,.14);
+  --gain:#2fb574; --gain-soft:rgba(47,181,116,.14);
+  --loss:#f0524a; --loss-soft:rgba(240,82,74,.14);
+  --chip:#22304d; --shadow:0 8px 30px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#f4f6f9; --surface:#ffffff; --surface-2:#f0f3f8; --raised:#e8edf5;
+  --line:rgba(16,26,48,.09); --line-strong:rgba(16,26,48,.16);
+  --text:#101a2c; --muted:#5a6a86; --faint:#8b97ad;
+  --accent:#b7791f; --accent-ink:#fff6e2; --accent-soft:rgba(183,121,31,.12);
+  --gain:#1f9d63; --gain-soft:rgba(31,157,99,.12);
+  --loss:#d63a34; --loss-soft:rgba(214,58,52,.12);
+  --chip:#e8edf5; --shadow:0 6px 22px rgba(20,32,58,.10);
+}
+
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;height:100%}
+body{
+  background:var(--ground); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-size:16px; line-height:1.4; -webkit-font-smoothing:antialiased;
+  overscroll-behavior-y:none;
+}
+button{font-family:inherit;color:inherit;border:none;background:none;cursor:pointer}
+.tnum{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.gain{color:var(--gain)} .loss{color:var(--loss)}
+
+/* ============================ App shell ============================ */
+#app{max-width:520px;margin:0 auto;min-height:100%;position:relative;
+  padding-bottom:calc(var(--tabbar-h) + var(--safe-bottom) + 8px)}
+.appbar{position:sticky;top:0;z-index:20;
+  padding:calc(var(--safe-top) + 10px) 18px 10px;
+  background:color-mix(in srgb,var(--ground) 82%,transparent);
+  backdrop-filter:saturate(1.6) blur(18px);-webkit-backdrop-filter:saturate(1.6) blur(18px);
+  border-bottom:1px solid var(--line)}
+.appbar h1{margin:0;font-size:22px;font-weight:800;letter-spacing:-.02em;display:flex;
+  align-items:center;gap:8px}
+.appbar .sub{margin-top:2px;font-size:11.5px;color:var(--muted);letter-spacing:.01em}
+.appbar .dot{width:7px;height:7px;border-radius:50%;background:var(--gain);box-shadow:0 0 0 3px var(--gain-soft)}
+.theme-btn{position:absolute;top:calc(var(--safe-top) + 12px);right:14px;
+  width:36px;height:36px;border-radius:50%;background:var(--surface-2);
+  border:1px solid var(--line);display:grid;place-items:center;font-size:16px}
+
+.view{padding:14px 14px 8px;display:none}
+.view.active{display:block;animation:fade .22s ease}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ============================ Controls ============================ */
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:14px;margin-bottom:12px;box-shadow:var(--shadow)}
+.panel h2{margin:0 0 2px;font-size:13px;font-weight:700;letter-spacing:.02em}
+.eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.ctl-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0}
+.ctl-row+.ctl-row{border-top:1px solid var(--line)}
+.ctl-label{font-size:13.5px;color:var(--text)}
+.ctl-label small{display:block;color:var(--faint);font-size:11px;font-weight:400;margin-top:1px}
+.stepper{display:flex;align-items:center;gap:0;background:var(--surface-2);border-radius:var(--r-sm);
+  border:1px solid var(--line)}
+.stepper button{width:38px;height:34px;font-size:20px;font-weight:600;color:var(--accent);display:grid;place-items:center}
+.stepper button:active{background:var(--accent-soft)}
+.stepper .val{min-width:52px;text-align:center;font-size:15px;font-weight:700}
+select,input[type=date]{background:var(--surface-2);color:var(--text);border:1px solid var(--line);
+  border-radius:var(--r-sm);padding:8px 10px;font-size:14px;font-weight:600;font-family:inherit;
+  -webkit-appearance:none;appearance:none}
+.seg{display:flex;gap:8px;overflow-x:auto;padding:4px 2px 6px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.seg::-webkit-scrollbar{display:none}
+.seg button{flex:0 0 auto;padding:9px 15px;font-size:13px;font-weight:700;border-radius:20px;color:var(--muted);
+  background:var(--surface-2);border:1px solid var(--line);white-space:nowrap}
+.seg button.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.search{width:100%;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-md);
+  padding:11px 14px;font-size:15px;color:var(--text);font-family:inherit}
+.search::placeholder{color:var(--faint)}
+.note{font-size:11.5px;color:var(--faint);margin-top:6px;line-height:1.45}
+.warn{background:var(--loss-soft);border:1px solid color-mix(in srgb,var(--loss) 40%,transparent);
+  color:var(--loss);border-radius:var(--r-md);padding:11px 13px;font-size:13px;font-weight:600;margin-bottom:12px}
+.ok-badge{background:var(--gain-soft);color:var(--gain);border-radius:20px;padding:3px 10px;font-size:11.5px;font-weight:700}
+
+/* ============================ Ranking cards ============================ */
+.count-line{display:flex;justify-content:space-between;align-items:baseline;
+  padding:2px 4px 10px;font-size:12px;color:var(--muted)}
+.count-line b{color:var(--text);font-size:13px}
+.card{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r-md);padding:12px 12px;margin-bottom:8px;position:relative}
+.card.sel{border-color:color-mix(in srgb,var(--accent) 55%,transparent);
+  background:linear-gradient(90deg,var(--accent-soft),var(--surface) 60%)}
+.rank{flex:none;width:30px;text-align:center;font-size:13px;font-weight:800;color:var(--muted)}
+.card.sel .rank{color:var(--accent)}
+.cid{flex:1;min-width:0}
+.tick{font-size:16.5px;font-weight:800;letter-spacing:-.01em}
+.cname{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.csec{font-size:10.5px;color:var(--faint);margin-top:2px}
+.metric{flex:none;text-align:right;min-width:74px}
+.metric .big{font-size:19px;font-weight:800;letter-spacing:-.02em}
+.metric .sub{font-size:10.5px;color:var(--muted);margin-top:1px}
+.selbtn{flex:none;width:40px;height:40px;border-radius:50%;background:var(--surface-2);
+  border:1.5px solid var(--line-strong);display:grid;place-items:center;font-size:22px;font-weight:400;
+  color:var(--muted);transition:transform .12s}
+.selbtn:active{transform:scale(.88)}
+.card.sel .selbtn{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.tap{flex:1;min-width:0;display:flex;align-items:center;gap:12px}
+
+/* ============================ Portfolio ============================ */
+.big-stat{display:flex;gap:10px;margin-bottom:12px}
+.big-stat .box{flex:1;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);
+  padding:12px 12px;text-align:center}
+.big-stat .box .v{font-size:22px;font-weight:800;letter-spacing:-.02em}
+.big-stat .box .l{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:2px}
+.wrow{display:flex;align-items:center;gap:11px;padding:11px 0}
+.wrow+.wrow{border-top:1px solid var(--line)}
+.wrow .wt{flex:none;width:56px;text-align:right;font-size:16px;font-weight:800}
+.wrow .wc{flex:1;min-width:0}
+.wrow .wc .n{font-size:14.5px;font-weight:700}
+.wrow .wc .s{font-size:11px;color:var(--faint);margin-top:1px}
+.bar{height:7px;border-radius:4px;background:var(--surface-2);overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 60%,#fff))}
+.remove{flex:none;width:30px;height:30px;border-radius:50%;background:var(--surface-2);border:1px solid var(--line);
+  color:var(--muted);font-size:16px;display:grid;place-items:center}
+.sector-bar{display:flex;height:26px;border-radius:8px;overflow:hidden;margin:8px 0 6px;border:1px solid var(--line)}
+.sector-bar span{height:100%}
+.legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:8px}
+.legend .li{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
+.legend .sw{width:10px;height:10px;border-radius:3px}
+.empty{text-align:center;padding:48px 20px;color:var(--muted)}
+.empty .ico{font-size:40px;margin-bottom:10px}
+.empty h3{margin:0 0 6px;font-size:17px;color:var(--text)}
+
+/* ============================ Detail overlay ============================ */
+#detail{position:fixed;inset:0;z-index:40;background:var(--ground);transform:translateX(100%);
+  transition:transform .28s cubic-bezier(.32,.72,0,1);overflow-y:auto;max-width:520px;margin:0 auto;
+  padding-bottom:calc(var(--safe-bottom) + 24px)}
+#detail.open{transform:translateX(0)}
+.dback{position:sticky;top:0;z-index:2;padding:calc(var(--safe-top) + 10px) 16px 10px;
+  background:color-mix(in srgb,var(--ground) 82%,transparent);backdrop-filter:blur(18px);
+  -webkit-backdrop-filter:blur(18px);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:6px}
+.dback button{font-size:16px;font-weight:600;color:var(--accent);display:flex;align-items:center;gap:3px}
+.dhead{padding:18px 18px 6px}
+.dhead .t{font-size:30px;font-weight:800;letter-spacing:-.03em}
+.dhead .n{font-size:15px;color:var(--muted);margin-top:2px}
+.dhead .tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.tag{font-size:11px;font-weight:600;background:var(--chip);border:1px solid var(--line);
+  border-radius:20px;padding:4px 10px;color:var(--muted)}
+.perf-card{margin:12px 16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:6px 4px;box-shadow:var(--shadow)}
+.perf-card .asof{padding:12px 16px 6px;font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em;font-weight:600}
+.perf-row{display:flex;align-items:center;justify-content:space-between;padding:15px 18px}
+.perf-row+.perf-row{border-top:1px solid var(--line)}
+.perf-row .pl{font-size:16px;font-weight:600;color:var(--muted)}
+.perf-row .pv{font-size:26px;font-weight:800;letter-spacing:-.02em}
+.dstat{display:flex;gap:10px;margin:0 16px 14px}
+.dstat .b{flex:1;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);padding:12px;text-align:center}
+.dstat .b .v{font-size:18px;font-weight:800}
+.dstat .b .l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:3px}
+.spark{margin:0 16px 16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);padding:14px}
+.spark .lab{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600;margin-bottom:8px}
+
+/* ============================ Tab bar ============================ */
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;height:calc(var(--tabbar-h) + var(--safe-bottom));
+  padding-bottom:var(--safe-bottom);max-width:520px;margin:0 auto;
+  background:color-mix(in srgb,var(--ground) 88%,transparent);
+  backdrop-filter:saturate(1.6) blur(20px);-webkit-backdrop-filter:saturate(1.6) blur(20px);
+  border-top:1px solid var(--line);display:flex}
+.tabbar button{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  color:var(--faint);font-size:10.5px;font-weight:600}
+.tabbar button.on{color:var(--accent)}
+.tabbar .ic{font-size:21px;line-height:1}
+.tabbar .badge{position:absolute;top:8px;margin-left:26px;background:var(--accent);color:var(--accent-ink);
+  font-size:10px;font-weight:800;min-width:17px;height:17px;border-radius:9px;display:grid;place-items:center;padding:0 4px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="appbar">
+    <h1><span class="dot"></span> Momentum Screener</h1>
+    <div class="sub" id="freshness">Loading data…</div>
+    <button class="theme-btn" id="themeBtn" aria-label="Toggle theme">◐</button>
+  </header>
+
+  <!-- ===== Screener view ===== -->
+  <section class="view active" id="v-screener">
+    <div class="panel">
+      <div class="eyebrow">Universe</div>
+      <div class="seg" id="uniSeg" style="margin-top:8px"></div>
+      <input class="search" id="search" placeholder="Search ticker or company" style="margin-top:10px" autocomplete="off">
+    </div>
+
+    <div class="panel">
+      <div class="eyebrow">Ranking window · trading days</div>
+      <div class="ctl-row">
+        <div class="ctl-label">As-of date<small id="asofSub"></small></div>
+        <div class="stepper">
+          <button id="asofDec" aria-label="Earlier as-of">‹</button>
+          <span class="val tnum" id="asofVal">—</span>
+          <button id="asofInc" aria-label="Later as-of">›</button>
+        </div>
+      </div>
+      <div class="ctl-row">
+        <div class="ctl-label">Start offset<small>days ago window opens</small></div>
+        <div class="stepper">
+          <button data-k="start" data-d="-1">−</button>
+          <span class="val tnum" id="startVal">252</span>
+          <button data-k="start" data-d="1">+</button>
+        </div>
+      </div>
+      <div class="ctl-row">
+        <div class="ctl-label">End offset<small>days ago window closes (skip)</small></div>
+        <div class="stepper">
+          <button data-k="end" data-d="-1">−</button>
+          <span class="val tnum" id="endVal">21</span>
+          <button data-k="end" data-d="1">+</button>
+        </div>
+      </div>
+      <div class="note" id="windowNote"></div>
+    </div>
+
+    <div class="count-line">
+      <span><b id="visCount">0</b> ranked · <span id="selCount">0</span> selected</span>
+      <span>Sharpe momentum ▾</span>
+    </div>
+    <div id="rankList"></div>
+  </section>
+
+  <!-- ===== Portfolio view ===== -->
+  <section class="view" id="v-portfolio">
+    <div class="big-stat">
+      <div class="box"><div class="v tnum" id="pfCount">0</div><div class="l">Holdings</div></div>
+      <div class="box"><div class="v tnum" id="pfTotal">0%</div><div class="l">Allocated</div></div>
+      <div class="box"><div class="v tnum" id="pfSectors">0</div><div class="l">Sectors</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="eyebrow">HRP constraints</div>
+      <div class="ctl-row">
+        <div class="ctl-label">Max stock weight<small>per-name cap</small></div>
+        <div class="stepper">
+          <button data-cap="stock" data-d="-1">−</button>
+          <span class="val tnum" id="maxStockVal">Off</span>
+          <button data-cap="stock" data-d="1">+</button>
+        </div>
+      </div>
+      <div class="ctl-row">
+        <div class="ctl-label">Max sector weight<small>per-sector cap</small></div>
+        <div class="stepper">
+          <button data-cap="sector" data-d="-1">−</button>
+          <span class="val tnum" id="maxSectorVal">Off</span>
+          <button data-cap="sector" data-d="1">+</button>
+        </div>
+      </div>
+      <div class="note">Long-only Hierarchical Risk Parity on the latest 252 trading days (as-of), independent of the ranking skip window. Capped excess is redistributed proportionally until weights total exactly 100%.</div>
+    </div>
+
+    <div id="feasMsg"></div>
+
+    <div class="panel" id="sectorPanel" style="display:none">
+      <div class="eyebrow">Sector allocation</div>
+      <div class="sector-bar" id="sectorBar"></div>
+      <div class="legend" id="sectorLegend"></div>
+    </div>
+
+    <div id="weightList"></div>
+  </section>
+</div>
+
+<!-- ===== Ticker detail overlay ===== -->
+<div id="detail">
+  <div class="dback"><button id="detailBack">‹ Screener</button></div>
+  <div id="detailBody"></div>
+</div>
+
+<!-- ===== Tab bar ===== -->
+<nav class="tabbar">
+  <button class="on" data-tab="screener"><span class="ic">▚</span>Screener</button>
+  <button data-tab="portfolio" style="position:relative"><span class="ic">◈</span>Portfolio<span class="badge hidden" id="tabBadge">0</span></button>
+</nav>
+
+<script id="snap" type="application/json">__SNAPSHOT_JSON__</script>
+<script>
+"use strict";
+/* ==================================================================
+   Sharpe Momentum Screener — client engine (no network, no API key)
+   All market data is the embedded build-time snapshot below.
+   ================================================================== */
+const TD = 252;                       // trading days / year
+const SNAP = JSON.parse(document.getElementById('snap').textContent);
+const DATES = SNAP.dates;             // ascending 'YYYY-MM-DD'
+const N = DATES.length;
+const TICKERS = SNAP.tickers;         // [{symbol,name,sector,industry,marketCap,exchange,universes,closes[]}]
+const BYSYM = Object.fromEntries(TICKERS.map(t => [t.symbol, t]));
+
+/* ---------- persisted state ---------- */
+const LS = 'sms.v1';
+const state = Object.assign({
+  universe: Object.keys(SNAP.universes)[0],
+  asof: N - 1, start: 252, end: 21,
+  selected: [], maxStock: 0, maxSector: 0,     // 0 = Off
+  tab: 'screener'
+}, load());
+function load(){ try{ return JSON.parse(localStorage.getItem(LS)) || {}; }catch(e){ return {}; } }
+function save(){ try{ localStorage.setItem(LS, JSON.stringify(state)); }catch(e){} }
+const selSet = new Set(state.selected);
+
+/* ==================================================================
+   Numerics — mirrors build/reference_numerics.py exactly
+   ================================================================== */
+function simpleReturns(closes){
+  const r = new Array(closes.length - 1);
+  for (let i = 1; i < closes.length; i++) r[i-1] = closes[i]/closes[i-1] - 1;
+  return r;
+}
+function mean(a){ let s=0; for (const x of a) s+=x; return s/a.length; }
+function sampleStd(a){
+  if (a.length < 2) return 0;
+  const m = mean(a); let s=0;
+  for (const x of a) s += (x-m)*(x-m);
+  return Math.sqrt(s/(a.length-1));
+}
+// Sharpe momentum over prices[asof-start .. asof-end] inclusive
+function sharpeMomentum(closes, asof, start, end){
+  const lo = asof - start, hi = asof - end;
+  if (lo < 0 || hi >= closes.length || hi - lo < 2) return null;
+  const seg = closes.slice(lo, hi + 1);
+  const r = simpleReturns(seg);
+  if (r.length < 2) return null;
+  const m = mean(r), sd = sampleStd(r);
+  const annRet = m * TD, annVol = sd * Math.sqrt(TD);
+  const sharpe = annVol > 0 ? annRet / annVol : 0;
+  const cum = seg[seg.length-1]/seg[0] - 1;
+  return { sharpe, annRet, annVol, cum, n: r.length };
+}
+
+// ---- Configurable momentum score -------------------------------------------
+// Daily simple returns over [asof-startOff, asof-endOff]. Returns null if the
+// window runs off the start or contains a null/non-positive close (the name
+// lacks history there) — so residual/ranking is marked unavailable, not faked.
+function momentumDaily(closes, asof, startOff, endOff){
+  const lo = asof - startOff, hi = asof - endOff;
+  if (lo < 0 || hi >= closes.length || hi <= lo) return null;
+  const seg = closes.slice(lo, hi + 1);
+  for (let i = 0; i < seg.length; i++) if (seg[i] == null || !(seg[i] > 0)) return null;
+  return { r: simpleReturns(seg), lo, hi, cum: seg[seg.length - 1] / seg[0] - 1 };
+}
+// Arithmetic annualization: annRet = mean·252, annVol = sampleStd·√252.
+function annualizeStats(r){
+  if (!r || r.length < 2) return null;
+  return { annRet: mean(r) * TD, annVol: sampleStd(r) * Math.sqrt(TD) };
+}
+// OLS single-factor fit of stock daily returns y on market daily returns x:
+// beta = cov(x,y)/var(x), alpha = mean(y) − beta·mean(x).
+function olsFit(y, x){
+  const n = Math.min(y.length, x.length);
+  if (n < 60) return null;
+  let my = 0, mx = 0;
+  for (let i = 0; i < n; i++){ my += y[i]; mx += x[i]; }
+  my /= n; mx /= n;
+  let cov = 0, vx = 0;
+  for (let i = 0; i < n; i++){ const dx = x[i] - mx; cov += (y[i] - my) * dx; vx += dx * dx; }
+  const beta = vx > 0 ? cov / vx : 0;
+  return { alpha: my - beta * mx, beta, n };
+}
+// Unified score. cfg = {retStart, retEnd, volStart, volEnd, matchVol, mode,
+// removeMkt, betaWindow}. mode: 'return' | 'vol' | 'sharpe' (annRet ÷ annVol).
+// removeMkt = residual momentum: estimate (alpha,beta) via OLS over the trailing
+// `betaWindow` days against `market` (a fixed-ETF daily-return array), then take
+// residuals e_t = r_t − alpha − beta·m_t over the selected return/vol windows.
+function momentumScore(closes, market, asof, cfg){
+  const rw = momentumDaily(closes, asof, cfg.retStart, cfg.retEnd);
+  if (!rw) return null;
+  const vStart = cfg.matchVol ? cfg.retStart : cfg.volStart;
+  const vEnd = cfg.matchVol ? cfg.retEnd : cfg.volEnd;
+  const vw = momentumDaily(closes, asof, vStart, vEnd);
+  if (cfg.mode !== 'return' && !vw) return null;
+  let rRet = rw.r, vRet = vw ? vw.r : null, beta = null, alpha = null, cum = rw.cum;
+  if (cfg.removeMkt) {
+    const bw = cfg.betaWindow || 756;
+    const bLo = asof - bw, bHi = asof;
+    if (bLo < 0) return null;                       // insufficient history for beta
+    const bseg = closes.slice(bLo, bHi + 1);
+    for (let i = 0; i < bseg.length; i++) if (bseg[i] == null || !(bseg[i] > 0)) return null;
+    const fit = olsFit(simpleReturns(bseg), market.slice(bLo, bHi));
+    if (!fit) return null;
+    alpha = fit.alpha; beta = fit.beta;
+    rRet = rw.r.map((v, i) => v - alpha - beta * market[rw.lo + i]);
+    if (vw) vRet = vw.r.map((v, i) => v - alpha - beta * market[vw.lo + i]);
+    let cr = 1; for (const e of rRet) cr *= (1 + e); cum = cr - 1;  // cumulative residual
+  }
+  const ra = annualizeStats(rRet);
+  if (!ra) return null;
+  const va = vw ? annualizeStats(vRet) : null;
+  const annRet = ra.annRet, annVol = va ? va.annVol : null;
+  let score;
+  if (cfg.mode === 'return') score = annRet;
+  else if (cfg.mode === 'vol') score = annVol;
+  else score = (annVol && annVol > 0) ? annRet / annVol : 0;
+  return { annRet, annVol, score, cum, beta, alpha };
+}
+
+/* ---------- HRP (average linkage, quasi-diag, recursive IVP) ---------- */
+function covMatrix(R){                       // R: T×N returns -> N×N sample cov
+  const T = R.length, Nn = R[0].length;
+  const mu = new Array(Nn).fill(0);
+  for (let t=0;t<T;t++) for (let j=0;j<Nn;j++) mu[j]+=R[t][j];
+  for (let j=0;j<Nn;j++) mu[j]/=T;
+  const cov = Array.from({length:Nn},()=>new Array(Nn).fill(0));
+  for (let i=0;i<Nn;i++) for (let j=i;j<Nn;j++){
+    let s=0; for (let t=0;t<T;t++) s+=(R[t][i]-mu[i])*(R[t][j]-mu[j]);
+    const v = s/(T-1); cov[i][j]=v; cov[j][i]=v;
+  }
+  return cov;
+}
+function corrFromCov(cov){
+  const Nn = cov.length, std = cov.map((_,i)=>Math.sqrt(cov[i][i]>0?cov[i][i]:0));
+  const c = Array.from({length:Nn},()=>new Array(Nn).fill(0));
+  for (let i=0;i<Nn;i++) for (let j=0;j<Nn;j++){
+    if (std[i]>0 && std[j]>0){
+      let v = cov[i][j]/(std[i]*std[j]);
+      v = Math.max(-1, Math.min(1, v));       // stabilize
+      c[i][j] = v;
+    } else c[i][j] = (i===j)?1:0;
+  }
+  for (let i=0;i<Nn;i++) c[i][i]=1;
+  return c;
+}
+// average-linkage agglomerative clustering -> leaf order (quasi-diagonalization)
+function quasiDiagOrder(dist){
+  const n = dist.length;
+  if (n === 1) return [0];
+  const members = {}; for (let i=0;i<n;i++) members[i]=[i];
+  const D = {}; const key=(a,b)=>a<b?a+'_'+b:b+'_'+a;
+  for (let i=0;i<n;i++) for (let j=i+1;j<n;j++) D[key(i,j)]=dist[i][j];
+  const size={}; for (let i=0;i<n;i++) size[i]=1;
+  let active = new Set(); for (let i=0;i<n;i++) active.add(i);
+  let next = n; const merges = [];
+  while (active.size > 1){
+    let best=Infinity, ba=-1, bb=-1;
+    const arr=[...active];
+    for (let x=0;x<arr.length;x++) for (let y=x+1;y<arr.length;y++){
+      const d = D[key(arr[x],arr[y])];
+      if (d < best){ best=d; ba=arr[x]; bb=arr[y]; }
+    }
+    const na=size[ba], nb=size[bb];
+    merges[next] = [ba, bb];
+    members[next] = members[ba].concat(members[bb]);
+    size[next] = na+nb;
+    for (const k of active){
+      if (k===ba||k===bb) continue;
+      const da=D[key(ba,k)], db=D[key(bb,k)];
+      D[key(next,k)] = (na*da + nb*db)/(na+nb);   // UPGMA average linkage
+    }
+    active.delete(ba); active.delete(bb); active.add(next); next++;
+  }
+  const root = next-1;
+  const order=[]; const stack=[root];
+  // expand root preserving left/right order
+  (function expand(node){
+    if (node < n){ order.push(node); return; }
+    expand(merges[node][0]); expand(merges[node][1]);
+  })(root);
+  return order;
+}
+function clusterVar(cov, idx){
+  let inv=[], s=0;
+  for (const i of idx){ const v=1/cov[i][i]; inv.push(v); s+=v; }
+  inv = inv.map(v=>v/s);
+  let vv=0;
+  for (let a=0;a<idx.length;a++) for (let b=0;b<idx.length;b++)
+    vv += inv[a]*cov[idx[a]][idx[b]]*inv[b];
+  return vv;
+}
+function recursiveBisection(cov, order){
+  const n = cov.length; const w = new Array(n).fill(1);
+  let clusters = [order.slice()];
+  while (clusters.length){
+    const next=[];
+    for (const cl of clusters){
+      if (cl.length <= 1) continue;
+      const half = Math.floor(cl.length/2);
+      const left = cl.slice(0,half), right = cl.slice(half);
+      const vL = clusterVar(cov,left), vR = clusterVar(cov,right);
+      const alpha = 1 - vL/(vL+vR);
+      for (const i of left) w[i]*=alpha;
+      for (const i of right) w[i]*=(1-alpha);
+      next.push(left, right);
+    }
+    clusters = next;
+  }
+  const s = w.reduce((a,b)=>a+b,0);
+  return w.map(x=>x/s);
+}
+function hrpWeights(R){
+  const cov = covMatrix(R);
+  const corr = corrFromCov(cov);
+  const nn = cov.length;
+  const dist = Array.from({length:nn},()=>new Array(nn).fill(0));
+  for (let i=0;i<nn;i++) for (let j=0;j<nn;j++)
+    dist[i][j] = Math.sqrt(Math.max(0,(1-corr[i][j])/2));
+  const order = quasiDiagOrder(dist);
+  return recursiveBisection(cov, order);
+}
+
+/* ---------- constraint redistribution ---------- */
+function applyCaps(weights, sectors, maxStock, maxSector){
+  const tol=1e-9, n=weights.length;
+  let w = weights.slice(); let sum=w.reduce((a,b)=>a+b,0); w=w.map(x=>x/sum);
+  const secs=[...new Set(sectors)];
+  if (maxStock>0 && maxStock*n < 1-tol)
+    return {w, feasible:false, msg:`Infeasible: ${n} names capped at ${pct(maxStock)} hold at most ${pct(maxStock*n)}. Raise the stock cap to ≥ ${pct(1/n,1)} or add names.`};
+  if (maxSector>0){
+    // joint capacity: each sector can hold at most min(sectorCap, itsNames*stockCap).
+    // If the sectors together can't reach 100%, the two caps are jointly infeasible
+    // (a per-cap check alone misses this — e.g. 0.15 stock + 0.30 sector on a
+    // concentrated basket tops out below 1).
+    let capacity=0;
+    for (const s of secs){
+      let cnt=0; for (const x of sectors) if (x===s) cnt++;
+      capacity += maxStock>0 ? Math.min(maxSector, cnt*maxStock) : maxSector;
+    }
+    if (capacity < 1-tol)
+      return {w, feasible:false, msg: maxStock>0
+        ? `Infeasible: a ${pct(maxStock)} stock cap with a ${pct(maxSector)} sector cap lets these ${secs.length} sector${secs.length>1?'s':''} hold at most ${pct(capacity)}. Loosen a cap, add names, or spread across more sectors.`
+        : `Infeasible: ${secs.length} sector${secs.length>1?'s':''} capped at ${pct(maxSector)} hold at most ${pct(capacity)}. Raise the sector cap or diversify sectors.`};
+  }
+  for (let iter=0; iter<1000; iter++){
+    let changed=false;
+    if (maxStock>0){
+      const over = w.map(x=>x>maxStock+tol);
+      if (over.some(Boolean)){
+        let excess=0; for (let i=0;i<n;i++) if (over[i]){ excess+=w[i]-maxStock; w[i]=maxStock; }
+        const free=[]; let fs=0;
+        for (let i=0;i<n;i++) if (!over[i] && w[i]<maxStock-tol){ free.push(i); fs+=w[i]; }
+        if (!free.length) return {w, feasible:false, msg:'Infeasible: stock cap leaves no capacity to redistribute.'};
+        for (const i of free) w[i]+=excess*(w[i]/fs);
+        changed=true;
+      }
+    }
+    if (maxSector>0){
+      for (const s of secs){
+        const mask = sectors.map(x=>x===s);
+        let tot=0; for (let i=0;i<n;i++) if (mask[i]) tot+=w[i];
+        if (tot>maxSector+tol){
+          const excess=tot-maxSector, scale=maxSector/tot;
+          for (let i=0;i<n;i++) if (mask[i]) w[i]*=scale;
+          const free=[]; let fs=0;
+          for (let i=0;i<n;i++){
+            if (mask[i]) continue;
+            if (maxStock>0 && w[i]>=maxStock-tol) continue;
+            free.push(i); fs+=w[i];
+          }
+          if (!free.length) return {w, feasible:false, msg:'Infeasible: sector cap cannot be redistributed within the other caps. Loosen a cap or add names in other sectors.'};
+          for (const i of free) w[i]+=excess*(w[i]/fs);
+          changed=true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+  const s2=w.reduce((a,b)=>a+b,0); w=w.map(x=>x/s2);
+  return {w, feasible:true, msg:'ok'};
+}
+
+/* ==================================================================
+   Formatting helpers
+   ================================================================== */
+function pct(x, dp=0){ return (x*100).toFixed(dp)+'%'; }
+function signPct(x, dp=1){ return (x>=0?'+':'')+(x*100).toFixed(dp)+'%'; }
+function fmtSharpe(x){ return (x>=0?'+':'')+x.toFixed(2); }
+function fmtCap(x){ if(x>=1e12) return '$'+(x/1e12).toFixed(2)+'T'; if(x>=1e9) return '$'+(x/1e9).toFixed(1)+'B'; if(x>=1e6) return '$'+(x/1e6).toFixed(0)+'M'; return '$'+x; }
+function clsOf(x){ return x>=0?'gain':'loss'; }
+
+/* ==================================================================
+   Universe filtering + ranking
+   ================================================================== */
+function universeTickers(){
+  return TICKERS.filter(t => t.universes.includes(state.universe));
+}
+let RANKED = [];
+function recompute(){
+  const list = universeTickers();
+  const out = [];
+  for (const t of list){
+    const m = sharpeMomentum(t.closes, state.asof, state.start, state.end);
+    if (m) out.push({ t, m });
+  }
+  out.sort((a,b)=> b.m.sharpe - a.m.sharpe);
+  out.forEach((o,i)=> o.rank=i+1);
+  RANKED = out;
+}
+
+/* ==================================================================
+   Rendering
+   ================================================================== */
+const el = id => document.getElementById(id);
+function renderFreshness(){
+  el('freshness').textContent =
+    `FMP adj. close · ${SNAP.counts.eligible} eligible · as of ${SNAP.generatedAt.replace('T',' ').replace('Z',' UTC')}`;
+}
+function renderUniverseSeg(){
+  const seg = el('uniSeg'); seg.innerHTML='';
+  for (const [id,u] of Object.entries(SNAP.universes)){
+    const b=document.createElement('button');
+    b.textContent=u.label; b.className = id===state.universe?'on':'';
+    b.onclick=()=>{ state.universe=id; save(); recompute(); renderScreener(); };
+    seg.appendChild(b);
+  }
+}
+function renderWindowControls(){
+  el('asofVal').textContent = DATES[state.asof].slice(5);
+  el('asofSub').textContent = DATES[state.asof];
+  el('startVal').textContent = state.start;
+  el('endVal').textContent = state.end;
+  const lo = state.asof-state.start, hi=state.asof-state.end;
+  const nret = Math.max(0,(hi-lo));
+  let note;
+  if (lo<0) note = `⚠︎ Not enough history: window opens ${-lo} day(s) before the earliest date. Reduce the start offset or move the as-of date later.`;
+  else if (state.start<=state.end) note = `⚠︎ Start offset must exceed end offset (currently ${state.start} ≤ ${state.end}).`;
+  else note = `Window ${DATES[lo]} → ${DATES[hi]} · ${nret} daily returns · zero risk-free, sample σ, ×252 annualization.`;
+  el('windowNote').textContent = note;
+}
+function renderScreener(){
+  renderUniverseSeg();
+  renderWindowControls();
+  const q = (el('search').value||'').trim().toUpperCase();
+  const frag = document.createDocumentFragment();
+  let shown=0;
+  for (const o of RANKED){
+    if (q && !o.t.symbol.includes(q) && !o.t.name.toUpperCase().includes(q)) continue;
+    shown++;
+    frag.appendChild(rankCard(o));
+  }
+  const rl=el('rankList'); rl.innerHTML=''; rl.appendChild(frag);
+  el('visCount').textContent = shown;
+  el('selCount').textContent = selSet.size;
+  updateBadge();
+}
+function rankCard(o){
+  const {t,m,rank}=o; const sel=selSet.has(t.symbol);
+  const card=document.createElement('div'); card.className='card'+(sel?' sel':'');
+  const tap=document.createElement('div'); tap.className='tap';
+  tap.innerHTML=`<div class="rank tnum">${rank}</div>
+    <div class="cid">
+      <div class="tick">${t.symbol}</div>
+      <div class="cname">${t.name}</div>
+      <div class="csec">${t.sector}</div>
+    </div>
+    <div class="metric">
+      <div class="big tnum ${clsOf(m.sharpe)}">${fmtSharpe(m.sharpe)}</div>
+      <div class="sub tnum">${signPct(m.cum)} · σ ${pct(m.annVol,0)}</div>
+    </div>`;
+  tap.onclick=()=>openDetail(t.symbol);
+  const btn=document.createElement('button'); btn.className='selbtn';
+  btn.setAttribute('aria-label', sel?'Remove '+t.symbol:'Add '+t.symbol);
+  btn.textContent = sel?'✓':'+';
+  btn.onclick=(e)=>{ e.stopPropagation(); toggleSel(t.symbol); };
+  card.appendChild(tap); card.appendChild(btn);
+  return card;
+}
+function toggleSel(sym){
+  if (selSet.has(sym)) selSet.delete(sym); else selSet.add(sym);
+  state.selected=[...selSet]; save();
+  renderScreener();
+  if (state.tab==='portfolio') renderPortfolio();
+}
+function updateBadge(){
+  const b=el('tabBadge');
+  if (selSet.size){ b.textContent=selSet.size; b.classList.remove('hidden'); }
+  else b.classList.add('hidden');
+}
+
+/* ---------- portfolio ---------- */
+const SECTOR_COLORS=['#e8b24a','#2fb574','#5b9df0','#c86bd6','#f0894a','#54c7c7','#e0607e','#9aa7bd','#8bd450','#d64a4a','#6a7bd6'];
+let sectorColorMap={};
+function colorFor(sec){
+  if (!(sec in sectorColorMap)){
+    sectorColorMap[sec]=SECTOR_COLORS[Object.keys(sectorColorMap).length % SECTOR_COLORS.length];
+  }
+  return sectorColorMap[sec];
+}
+function hrpReturnWindow(sym){
+  // latest 252 trading days as-of: closes[asof-252 .. asof] -> 252 returns
+  const c=BYSYM[sym].closes; const hi=state.asof; const lo=Math.max(0,hi-TD);
+  return c.slice(lo, hi+1);
+}
+function computePortfolio(){
+  const syms=[...selSet].filter(s=>BYSYM[s]);
+  if (syms.length===0) return {syms:[], weights:[], feasible:true};
+  if (syms.length===1) return {syms, weights:[1], feasible:true, msg:'ok'};
+  // align on common length
+  let minLen=Infinity;
+  const cols=syms.map(s=>hrpReturnWindow(s));
+  cols.forEach(c=>{ minLen=Math.min(minLen,c.length); });
+  const R=[];
+  for (let t=1;t<minLen;t++){
+    const row=[];
+    for (let j=0;j<syms.length;j++){
+      const c=cols[j]; const off=c.length-minLen;
+      row.push(c[off+t]/c[off+t-1]-1);
+    }
+    R.push(row);
+  }
+  let w=hrpWeights(R);
+  const sectors=syms.map(s=>BYSYM[s].sector);
+  const capd=applyCaps(w, sectors, state.maxStock, state.maxSector);
+  return {syms, weights:capd.w, feasible:capd.feasible, msg:capd.msg, sectors};
+}
+function renderPortfolio(){
+  el('maxStockVal').textContent = state.maxStock?pct(state.maxStock):'Off';
+  el('maxSectorVal').textContent = state.maxSector?pct(state.maxSector):'Off';
+  const wl=el('weightList'); const pf=computePortfolio();
+  el('pfCount').textContent = pf.syms.length;
+  el('pfSectors').textContent = new Set(pf.syms.map(s=>BYSYM[s].sector)).size;
+
+  if (pf.syms.length===0){
+    el('pfTotal').textContent='0%';
+    el('sectorPanel').style.display='none';
+    el('feasMsg').innerHTML='';
+    wl.innerHTML=`<div class="empty"><div class="ico">◈</div><h3>No holdings yet</h3>
+      <div>Add names from the Screener with the <b>+</b> button. HRP weights compute automatically.</div></div>`;
+    updateBadge(); return;
+  }
+  const total = pf.weights.reduce((a,b)=>a+b,0);
+  el('pfTotal').textContent = (total*100).toFixed(total>0.9999&&total<1.0001?0:1)+'%';
+
+  if (!pf.feasible){
+    el('feasMsg').innerHTML=`<div class="warn">⚠︎ ${pf.msg}</div>`;
+  } else {
+    el('feasMsg').innerHTML = (state.maxStock||state.maxSector)
+      ? `<div style="text-align:center;margin-bottom:10px"><span class="ok-badge">✓ Constraints satisfied · weights total 100%</span></div>` : '';
+  }
+
+  // sector allocation
+  const sectorTot={};
+  pf.syms.forEach((s,i)=>{ const sec=BYSYM[s].sector; sectorTot[sec]=(sectorTot[sec]||0)+pf.weights[i]; });
+  const secEntries=Object.entries(sectorTot).sort((a,b)=>b[1]-a[1]);
+  const sb=el('sectorBar'); sb.innerHTML=''; const lg=el('sectorLegend'); lg.innerHTML='';
+  secEntries.forEach(([sec,wt])=>{
+    const span=document.createElement('span'); span.style.width=(wt*100)+'%'; span.style.background=colorFor(sec);
+    span.title=`${sec} ${pct(wt,1)}`; sb.appendChild(span);
+    const li=document.createElement('div'); li.className='li';
+    li.innerHTML=`<span class="sw" style="background:${colorFor(sec)}"></span>${sec} ${pct(wt,1)}`;
+    lg.appendChild(li);
+  });
+  el('sectorPanel').style.display = pf.syms.length?'block':'none';
+
+  // weight rows sorted desc
+  const rows=pf.syms.map((s,i)=>({s,w:pf.weights[i]})).sort((a,b)=>b.w-a.w);
+  const maxW=Math.max(...rows.map(r=>r.w),0.0001);
+  wl.innerHTML='';
+  for (const r of rows){
+    const t=BYSYM[r.s];
+    const div=document.createElement('div'); div.className='wrow';
+    div.innerHTML=`<div class="wt tnum">${pct(r.w, r.w<0.1?1:0)}</div>
+      <div class="wc">
+        <div class="n" style="display:flex;align-items:center;gap:7px"><span class="sw" style="width:9px;height:9px;border-radius:3px;background:${colorFor(t.sector)};display:inline-block"></span>${t.symbol} <span style="color:var(--faint);font-weight:500;font-size:12px">${t.sector}</span></div>
+        <div class="bar"><i style="width:${(r.w/maxW*100).toFixed(1)}%"></i></div>
+      </div>`;
+    const rm=document.createElement('button'); rm.className='remove'; rm.textContent='×';
+    rm.setAttribute('aria-label','Remove '+r.s);
+    rm.onclick=()=>toggleSel(r.s);
+    const nameTap=div.querySelector('.n'); nameTap.style.cursor='pointer'; nameTap.onclick=()=>openDetail(r.s);
+    div.appendChild(rm);
+    wl.appendChild(div);
+  }
+  updateBadge();
+}
+
+/* ---------- ticker detail ---------- */
+const PERIODS=[['5-day',5],['10-day',10],['1-month',21],['3-month',63],['6-month',126],['1-year',252]];
+function periodReturn(closes, asof, days){
+  const lo=asof-days; if (lo<0) return null;
+  return closes[asof]/closes[lo]-1;
+}
+function openDetail(sym){
+  const t=BYSYM[sym]; if (!t) return;
+  const body=el('detailBody');
+  const asofDate=DATES[state.asof];
+  const rowsHtml=PERIODS.map(([lab,d])=>{
+    const r=periodReturn(t.closes, state.asof, d);
+    if (r===null) return `<div class="perf-row"><div class="pl">${lab}</div><div class="pv" style="color:var(--faint)">—</div></div>`;
+    return `<div class="perf-row"><div class="pl">${lab}</div><div class="pv tnum ${clsOf(r)}">${signPct(r,2)}</div></div>`;
+  }).join('');
+  const m=sharpeMomentum(t.closes, state.asof, state.start, state.end);
+  const sel=selSet.has(sym);
+  body.innerHTML=`
+    <div class="dhead">
+      <div class="t">${t.symbol}</div>
+      <div class="n">${t.name}</div>
+      <div class="tags">
+        <span class="tag">${t.sector}</span>
+        <span class="tag">${t.industry}</span>
+        <span class="tag">${t.exchange}</span>
+        <span class="tag">${fmtCap(t.marketCap)}</span>
+      </div>
+    </div>
+    <div class="dstat">
+      <div class="b"><div class="v tnum ${m?clsOf(m.sharpe):''}">${m?fmtSharpe(m.sharpe):'—'}</div><div class="l">Sharpe mom.</div></div>
+      <div class="b"><div class="v tnum ${m?clsOf(m.cum):''}">${m?signPct(m.cum,0):'—'}</div><div class="l">Window ret.</div></div>
+      <div class="b"><div class="v tnum">${m?pct(m.annVol,0):'—'}</div><div class="l">Ann. vol</div></div>
+    </div>
+    <div class="spark"><div class="lab">Adjusted close · last 12 months</div><canvas id="sparkCv" width="600" height="140" style="width:100%;height:70px"></canvas></div>
+    <div class="perf-card">
+      <div class="asof">Performance · adjusted close · as of ${asofDate}</div>
+      ${rowsHtml}
+    </div>
+    <div style="padding:0 16px">
+      <button id="detailToggle" style="width:100%;padding:15px;border-radius:14px;font-size:16px;font-weight:700;
+        background:${sel?'var(--surface-2)':'var(--accent)'};color:${sel?'var(--text)':'var(--accent-ink)'};
+        border:1px solid ${sel?'var(--line-strong)':'var(--accent)'}">
+        ${sel?'✓ In portfolio — tap to remove':'+ Add to portfolio'}</button>
+    </div>`;
+  el('detailToggle').onclick=()=>{ toggleSel(sym); openDetail(sym); };
+  drawSpark(t.closes.slice(Math.max(0,state.asof-252), state.asof+1));
+  el('detail').classList.add('open');
+}
+let lastSpark=null;
+function drawSpark(series){
+  lastSpark=series;
+  const cv=el('sparkCv'); if(!cv) return; const ctx=cv.getContext('2d');
+  const W=cv.width,H=cv.height,pad=8; ctx.clearRect(0,0,W,H);
+  const lo=Math.min(...series),hi=Math.max(...series),rng=(hi-lo)||1;
+  const up = series[series.length-1]>=series[0];
+  const col = up? getCss('--gain'):getCss('--loss');
+  ctx.beginPath();
+  series.forEach((v,i)=>{
+    const x=pad+i/(series.length-1)*(W-2*pad);
+    const y=H-pad-((v-lo)/rng)*(H-2*pad);
+    i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+  });
+  ctx.lineWidth=2.5; ctx.strokeStyle=col; ctx.lineJoin='round'; ctx.stroke();
+  ctx.lineTo(W-pad,H-pad); ctx.lineTo(pad,H-pad); ctx.closePath();
+  const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,col+'44'); g.addColorStop(1,col+'00');
+  ctx.fillStyle=g; ctx.fill();
+}
+function getCss(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+/* ==================================================================
+   Navigation & events
+   ================================================================== */
+function setTab(tab){
+  state.tab=tab; save();
+  document.querySelectorAll('.tabbar button').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
+  el('v-screener').classList.toggle('active',tab==='screener');
+  el('v-portfolio').classList.toggle('active',tab==='portfolio');
+  if (tab==='portfolio') renderPortfolio();
+  window.scrollTo(0,0);
+}
+document.querySelectorAll('.tabbar button').forEach(b=> b.onclick=()=>setTab(b.dataset.tab));
+el('detailBack').onclick=()=> el('detail').classList.remove('open');
+
+// window steppers
+el('asofDec').onclick=()=>{ if(state.asof>state.start){ state.asof--; onWindowChange(); } };
+el('asofInc').onclick=()=>{ if(state.asof<N-1){ state.asof++; onWindowChange(); } };
+document.querySelectorAll('[data-k]').forEach(btn=> btn.onclick=()=>{
+  const k=btn.dataset.k, d=parseInt(btn.dataset.d,10);
+  if (k==='start') state.start=Math.max(state.end+2, Math.min(N-1, state.start+d));
+  if (k==='end')   state.end  =Math.max(1, Math.min(state.start-2, state.end+d));
+  onWindowChange();
+});
+function onWindowChange(){ save(); recompute(); renderScreener(); }
+
+// cap steppers
+document.querySelectorAll('[data-cap]').forEach(btn=> btn.onclick=()=>{
+  const cap=btn.dataset.cap, d=parseInt(btn.dataset.d,10);
+  const key= cap==='stock'?'maxStock':'maxSector';
+  let v=state[key];
+  if (v===0 && d>0) v = cap==='stock'?0.25:0.40;        // first tap turns it on
+  else v = Math.round((v + d*0.05)*100)/100;
+  if (v<0.05) v=0;                                       // below floor => Off
+  if (v>1) v=1;
+  state[key]=v; save(); renderPortfolio();
+});
+
+let searchTimer;
+el('search').oninput=()=>{ clearTimeout(searchTimer); searchTimer=setTimeout(renderScreener,120); };
+
+// theme toggle
+el('themeBtn').onclick=()=>{
+  const cur=document.documentElement.getAttribute('data-theme');
+  const next = cur==='dark'?'light':(cur==='light'?'':'dark');
+  if (next) document.documentElement.setAttribute('data-theme',next);
+  else document.documentElement.removeAttribute('data-theme');
+  try{ localStorage.setItem('sms.theme', next); }catch(e){}
+  // redraw spark if open (colors are theme-derived)
+  if (el('detail').classList.contains('open') && lastSpark) drawSpark(lastSpark);
+};
+(function(){ try{ const th=localStorage.getItem('sms.theme'); if(th) document.documentElement.setAttribute('data-theme',th); }catch(e){} })();
+
+/* ==================================================================
+   Boot
+   ================================================================== */
+// sanitize persisted window against dataset bounds
+state.asof=Math.max(0,Math.min(N-1, state.asof|0));
+state.start=Math.max(3, Math.min(N-1, state.start|0));
+state.end=Math.max(1, Math.min(state.start-2, state.end|0));
+if (!SNAP.universes[state.universe]) state.universe=Object.keys(SNAP.universes)[0];
+renderFreshness();
+recompute();
+renderScreener();
+setTab(state.tab==='portfolio'?'portfolio':'screener');
+</script>
+</body>
+</html>
