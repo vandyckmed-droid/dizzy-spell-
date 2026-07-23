@@ -508,7 +508,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
             </View>
           </View>
         ) : <View />}
-        <Text style={{ color: C.faint, fontSize: 11 }}>tap to select · › for detail</Text>
+        <Text style={{ color: C.faint, fontSize: 11 }}>tap ＋ to add · row opens detail</Text>
       </View>
       {st.selected.length ? (
         <Pressable onPress={() => setCueOpen(true)} accessibilityLabel="Basket cue settings"
@@ -610,10 +610,18 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
   const vol = m.annVol != null ? E.pct(m.annVol, 0) : '—';
   const rp = (removeMkt ? 'α ' : '');   // α = residual (market-neutral) return
 
-  // tap-to-select: a tap anywhere on the row adds/removes it (selection is the
-  // high-frequency action, so it gets the cheapest gesture — a single tap, with a
-  // light haptic tick and the accent bar / row tint for feedback). The stock detail
-  // moves to a trailing › chevron, which grabs its own tap so it never toggles.
+  // selection is the round + / ✓ checkmark button on the right (tap to add/remove,
+  // with a little bounce); tapping the row body opens the stock detail. The button
+  // picks up the basket cue — teal when the name diversifies, filled green once held.
+  const scale = useRef(new Animated.Value(1)).current;
+  const onSel = () => {
+    haptic(selected ? 'light' : 'select');
+    Animated.sequence([
+      Animated.timing(scale, { toValue: 0.8, duration: 70, useNativeDriver: true }),
+      Animated.spring(scale, { toValue: 1, friction: 4, tension: 140, useNativeDriver: true }),
+    ]).start();
+    onToggle();
+  };
 
   // right column: two clean color-coded scores (separate), one blended score
   // (blend), or a single score + context (single window)
@@ -644,17 +652,8 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
     );
   }
   return (
-    <Pressable dataSet={{ swipe: t.symbol }}
-      onPress={() => { haptic(selected ? 'light' : 'select'); onToggle(); }}
-      accessibilityRole="button" accessibilityState={{ selected }}
-      accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${t.symbol}`}
-      style={({ pressed }) => ({
-        borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line,
-        backgroundColor: pressed ? C.surface2 : (selected ? C.selRow : C.ground),
-        flexDirection: 'row', alignItems: 'stretch',
-      })}>
-      <View style={{ width: 3, backgroundColor: selected ? C.accent : 'transparent' }} />
-      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 15, paddingLeft: 10, paddingRight: 2, minWidth: 0, opacity: cue.opacity }}>
+    <View style={[styles.card, { backgroundColor: selected ? C.accentSoft : 'transparent', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line }]}>
+      <Pressable style={[styles.cardTap, { opacity: cue.opacity }]} onPress={onOpen} hitSlop={4}>
         <Text style={[styles.rank, { color: selected ? C.accent : C.faint }]}>{rank}</Text>
         <View style={{ flex: 1, minWidth: 0 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -669,13 +668,17 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
           </Text>
         </View>
         {right}
-        <Pressable onPress={onOpen} hitSlop={12} accessibilityRole="button"
-          accessibilityLabel={`${t.symbol} details`}
-          style={({ pressed }) => ({ paddingHorizontal: 8, paddingVertical: 10, marginLeft: 2, opacity: pressed ? 0.45 : 1 })}>
-          <Text style={{ color: C.faint, fontSize: 21, fontWeight: '400', lineHeight: 22 }}>›</Text>
-        </Pressable>
-      </View>
-    </Pressable>
+      </Pressable>
+      <Pressable onPress={onSel} hitSlop={8} accessibilityRole="button"
+        accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${t.symbol}${cue.kind === 'div' ? ', diversifies your basket' : cue.kind === 'redundant' ? `, correlated with ${cue.twin}` : ''}`}>
+        <Animated.View style={[styles.selBtn, { transform: [{ scale }],
+          backgroundColor: selected ? C.accent : cue.kind === 'div' ? C.divSoft : C.surface2 }]}>
+          <Text style={{ fontSize: 22, fontWeight: '600', color: selected ? C.accentInk : cue.kind === 'div' ? C.div : C.muted, marginTop: -2 }}>
+            {selected ? '✓' : '+'}
+          </Text>
+        </Animated.View>
+      </Pressable>
+    </View>
   );
 }
 
