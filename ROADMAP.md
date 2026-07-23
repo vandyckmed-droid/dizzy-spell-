@@ -66,6 +66,14 @@ Status: ✅ done · 🚧 in progress · ⬜ planned/candidate.
 - ✅ 🟢 Detail shows **β and annualized α (vs VTI, 756d OLS)** per name.
 - All 7 scoring configs cross-checked against the NumPy reference (**991 checks**).
 
+### Basket-aware screening
+- ✅ 🟡 **Correlation-to-basket cue** in the ranked list — as you walk down, each unselected
+  name is scored by its **max daily-return correlation vs the names you've already selected**
+  (latest 252d). Redundant names (ρ ≥ 0.60) **fade** (deeper as ρ→0.9) and show their nearest
+  held twin (`≈ MU`); diversifiers (ρ < 0.35) stay crisp with a **teal dot**, a *diversifies*
+  tag, and a teal-tinted **+** button. Neutral names are untouched. No cue until the basket is
+  non-empty; recomputed only when the basket or window changes.
+
 ### Fixes
 - ✅ 🟢 **As-of persistence bug** — the as-of was persisted as a numeric index, so a snapshot
   rebuild that shifted the calendar (520→800 trading days) silently pointed it at an old day,

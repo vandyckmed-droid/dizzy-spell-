@@ -38,6 +38,7 @@ const palettes = {
     accent: '#00C805', accentInk: '#00140A', accentSoft: 'rgba(0,200,5,0.14)',
     gain: '#00C805', loss: '#FF5000',
     gainSoft: 'rgba(0,200,5,0.14)', lossSoft: 'rgba(255,80,0,0.14)',
+    div: '#3DD6C0', divSoft: 'rgba(61,214,192,0.16)',
   },
   light: {
     ground: '#FFFFFF', surface: '#FFFFFF', surface2: '#F2F4F6', raised: '#E9ECEF',
@@ -46,6 +47,7 @@ const palettes = {
     accent: '#00A804', accentInk: '#FFFFFF', accentSoft: 'rgba(0,168,4,0.12)',
     gain: '#00A804', loss: '#E63A00',
     gainSoft: 'rgba(0,168,4,0.12)', lossSoft: 'rgba(230,58,0,0.12)',
+    div: '#0E9E8C', divSoft: 'rgba(14,158,140,0.12)',
   },
 };
 
@@ -273,6 +275,12 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
 
   const selSet = new Set(st.selected);
   const selInView = ranked.reduce((n, o) => n + (selSet.has(o.t.symbol) ? 1 : 0), 0);
+  // correlation of each ranked name vs the current basket → fade the redundant,
+  // flag the diversifiers. Recomputed only when the basket or window shifts.
+  const bySym = useMemo(() => Object.fromEntries(snap.tickers.map(t => [t.symbol, t])), [snap]);
+  const corrMap = useMemo(
+    () => basketCorrMap(ranked, st.selected, (s) => bySym[s], st.asof),
+    [ranked, st.selected, st.asof, bySym]);
   const sig = `${st.universe}|${st.mode}|${st.removeMkt}|${st.matchVol}|${st.sortDir}|${st.capBand}|${st.exch.join(',')}`;
   useEffect(() => {
     pulse.setValue(0.4);
@@ -367,6 +375,12 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
           </Pressable>
         </View>
       </View>
+      {st.selected.length ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 6, paddingBottom: 8 }}>
+          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: C.div }} />
+          <Text style={{ color: C.faint, fontSize: 11 }}>diversifies vs basket · faded ≈ a name you hold (latest 252d)</Text>
+        </View>
+      ) : null}
     </View>
   );
 
@@ -383,6 +397,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} />}
         renderItem={({ item }) => (
           <RankCard C={C} o={item} mode={st.mode} removeMkt={st.removeMkt} selected={selSet.has(item.t.symbol)}
+            corr={selSet.has(item.t.symbol) ? null : corrMap.get(item.t.symbol)} hasBasket={st.selected.length > 0}
             onOpen={() => onOpen(item.t.symbol)}
             onToggle={() => persist(toggleSel(st, item.t.symbol))} />
         )} />
@@ -393,8 +408,23 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
   );
 }
 
-function RankCard({ C, o, mode, removeMkt, selected, onOpen, onToggle }) {
+// correlation-with-basket thresholds (max daily-return ρ vs a held name)
+const RHO_DIV = 0.35;   // below → diversifying, flag it
+const RHO_RED = 0.60;   // at/above → redundant, fade it (deeper fade as ρ→0.9)
+function rankCue(corr, hasBasket) {
+  if (!hasBasket || !corr || corr.rho == null) return { opacity: 1, kind: null };
+  const rho = corr.rho;
+  if (rho >= RHO_RED) {
+    const opacity = Math.max(0.42, 0.82 - ((rho - RHO_RED) / 0.30) * 0.40);
+    return { opacity, kind: 'redundant', twin: corr.twin };
+  }
+  if (rho < RHO_DIV) return { opacity: 1, kind: 'div' };
+  return { opacity: 1, kind: null };
+}
+
+function RankCard({ C, o, mode, removeMkt, selected, corr, hasBasket, onOpen, onToggle }) {
   const { t, m, rank } = o;
+  const cue = rankCue(corr, hasBasket);
   const vol = m.annVol != null ? E.pct(m.annVol, 0) : '—';
   const rp = (removeMkt ? 'α ' : '');   // α = residual (market-neutral) return
   // big number = the score under the active mode; sub-line = context metrics
@@ -419,12 +449,19 @@ function RankCard({ C, o, mode, removeMkt, selected, onOpen, onToggle }) {
   };
   return (
     <View style={[styles.card, { backgroundColor: selected ? C.accentSoft : 'transparent', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line }]}>
-      <Pressable style={styles.cardTap} onPress={onOpen} hitSlop={4}>
+      <Pressable style={[styles.cardTap, { opacity: cue.opacity }]} onPress={onOpen} hitSlop={4}>
         <Text style={[styles.rank, { color: selected ? C.accent : C.faint }]}>{rank}</Text>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={[styles.tick, { color: C.text }]}>{t.symbol}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={[styles.tick, { color: C.text }]}>{t.symbol}</Text>
+            {cue.kind === 'div' ? <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: C.div }} /> : null}
+          </View>
           <Text numberOfLines={1} style={[styles.cname, { color: C.muted }]}>{t.name}</Text>
-          <Text style={[styles.csec, { color: C.faint }]}>{t.sector}</Text>
+          <Text numberOfLines={1} style={[styles.csec, { color: C.faint }]}>
+            {t.sector}
+            {cue.kind === 'redundant' ? <Text style={{ color: C.muted }}>{`  ≈ ${cue.twin}`}</Text> : null}
+            {cue.kind === 'div' ? <Text style={{ color: C.div }}>  diversifies</Text> : null}
+          </Text>
         </View>
         <View style={{ alignItems: 'flex-end', minWidth: 84 }}>
           <Text style={[styles.big, { color: bigColor }]}>{big}</Text>
@@ -432,9 +469,10 @@ function RankCard({ C, o, mode, removeMkt, selected, onOpen, onToggle }) {
         </View>
       </Pressable>
       <Pressable onPress={onSel} hitSlop={8} accessibilityRole="button"
-        accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${t.symbol}`}>
-        <Animated.View style={[styles.selBtn, { transform: [{ scale }], backgroundColor: selected ? C.accent : C.surface2 }]}>
-          <Text style={{ fontSize: 22, fontWeight: '600', color: selected ? C.accentInk : C.muted, marginTop: -2 }}>
+        accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${t.symbol}${cue.kind === 'div' ? ', diversifies your basket' : cue.kind === 'redundant' ? `, correlated with ${cue.twin}` : ''}`}>
+        <Animated.View style={[styles.selBtn, { transform: [{ scale }],
+          backgroundColor: selected ? C.accent : cue.kind === 'div' ? C.divSoft : C.surface2 }]}>
+          <Text style={{ fontSize: 22, fontWeight: '600', color: selected ? C.accentInk : cue.kind === 'div' ? C.div : C.muted, marginTop: -2 }}>
             {selected ? '✓' : '+'}
           </Text>
         </Animated.View>
@@ -1084,6 +1122,56 @@ function TickerLogo({ C, symbol, size = 46 }) {
 }
 
 // Top-k names by daily-return correlation with `target` over the latest 252 days.
+// Demeaned daily-return vector over the latest ~252d ending at `asof`, plus its
+// sum of squares. Returns null if the name lacks a clean window there.
+function demeanedReturns(closes, lo, hi) {
+  if (closes.length <= hi) return null;
+  const r = [];
+  for (let i = lo; i < hi; i++) {
+    const a = closes[i], b = closes[i + 1];
+    if (!(a > 0) || !(b > 0)) return null;
+    r.push(b / a - 1);
+  }
+  let mean = 0; for (const x of r) mean += x; mean /= r.length;
+  let ss = 0; for (let i = 0; i < r.length; i++) { r[i] -= mean; ss += r[i] * r[i]; }
+  return ss > 0 ? { d: r, ss } : null;
+}
+
+// For each candidate name, its MAX daily-return correlation against the already-
+// selected basket (and which held name is that nearest "twin"). Used to fade
+// redundant names and flag diversifiers as you walk the ranked list. Empty
+// basket → empty map (no cue). Keyed by symbol.
+function basketCorrMap(candidates, selected, byField, asof) {
+  const m = new Map();
+  if (!selected.length) return m;
+  const hi = asof, lo = Math.max(0, hi - 252);
+  if (hi - lo < 20) return m;
+  const selVecs = [];
+  for (const s of selected) {
+    const t = byField(s);
+    const v = t && demeanedReturns(t.closes, lo, hi);
+    if (v) selVecs.push({ sym: s, ...v });
+  }
+  if (!selVecs.length) return m;
+  const n = selVecs[0].d.length;
+  const selSet = new Set(selected);
+  for (const o of candidates) {
+    const sym = o.t.symbol;
+    if (selSet.has(sym)) continue;
+    const v = demeanedReturns(o.t.closes, lo, hi);
+    if (!v || v.d.length !== n) continue;
+    let best = -2, twin = null;
+    for (const sv of selVecs) {
+      let dot = 0; const vd = v.d, sd = sv.d;
+      for (let i = 0; i < n; i++) dot += vd[i] * sd[i];
+      const rho = dot / Math.sqrt(v.ss * sv.ss);
+      if (rho > best) { best = rho; twin = sv.sym; }
+    }
+    m.set(sym, { rho: best, twin });
+  }
+  return m;
+}
+
 function topCorrelated(target, pool, asof, k = 3) {
   const lo = Math.max(0, asof - 252), hi = asof;
   if (hi - lo < 20) return [];
