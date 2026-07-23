@@ -36,11 +36,15 @@ DAILY_KEEP = 460        # daily bars retained (≈1y display + 200-EMA warmup)
 INTRADAY_KEEP = 780     # 5-min bars retained (≈2 weeks of regular-hours sessions)
 
 # The macro dashboard. Order defines display order. `group` clusters the list.
+# `disp` overrides the shown ticker when the fetch symbol isn't display-friendly.
 MACRO = [
-    {"symbol": "SPY", "label": "S&P 500",        "desc": "US large-cap equities",  "group": "Equities"},
-    {"symbol": "TLT", "label": "20+ Yr Treasuries", "desc": "Long-duration rates",  "group": "Rates"},
-    {"symbol": "XLE", "label": "Energy Select",   "desc": "US energy sector",       "group": "Energy"},
-    {"symbol": "GLD", "label": "Gold",            "desc": "Gold bullion",           "group": "Metals"},
+    {"symbol": "SPY",  "label": "S&P 500",         "desc": "US large-cap equities",      "group": "Equities"},
+    {"symbol": "TLT",  "label": "20+ Yr Treasuries", "desc": "Long-duration rates",       "group": "Rates"},
+    {"symbol": "HYG",  "label": "High Yield",       "desc": "High-yield corporate credit", "group": "Credit"},
+    {"symbol": "XLE",  "label": "Energy Select",    "desc": "US energy sector",           "group": "Energy"},
+    {"symbol": "GLD",  "label": "Gold",             "desc": "Gold bullion",               "group": "Metals"},
+    {"symbol": "UUP",  "label": "US Dollar",        "desc": "Dollar index (bullish)",     "group": "Dollar"},
+    {"symbol": "^VIX", "disp": "VIX", "label": "Volatility", "desc": "CBOE VIX index",     "group": "Volatility"},
 ]
 
 

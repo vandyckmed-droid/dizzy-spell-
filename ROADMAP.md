@@ -35,8 +35,9 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 ### Portfolio & weighting
 - 🟡 Long-only **HRP** (stabilized corr → √((1−ρ)/2) → average linkage → quasi-diagonalization →
   recursive inverse-variance, latest 252d).
-- 🟡 Per-stock / per-sector **caps** redistributed to exactly 100%, with correct **joint feasibility**
-  (stock + sector caps checked together) and guidance when infeasible.
+- 🟡 Per-stock / per-sector **caps** + a per-stock **minimum weight** (0.5% steps, default off),
+  redistributed to exactly 100% with correct **joint feasibility** (caps + floor solved together)
+  and guidance when infeasible.
 - 🟢 Sector allocation bar; **Clear basket**.
 
 ### Ticker detail
@@ -52,34 +53,48 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 - 🟢 **Configurable EMAs** — EMA-50 / EMA-200 on the daily views (on/off + adjustable period).
 - 🟢 **Golden / death cross effect** — regime ribbon (green fast>slow, red fast<slow) + diamond
   markers at each crossover; toggleable.
+- 🟢 Seven macro symbols across assets — **SPY · TLT · HYG · XLE · GLD · UUP · VIX** (equities,
+  rates, credit, energy, metals, dollar, volatility).
 
 ### Design & reliability
 - 🟡 Robinhood-inspired dark theme (near-black, vivid green/red, tabular numerals, soft geometry).
 - 🟢 Static HTML artifact twin shares the validated engine.
-- 🟡 Numerics cross-checked vs a NumPy reference — `validate_js.mjs` (991) + `verify_edge.mjs` (1147).
+- 🟡 Numerics cross-checked vs a NumPy reference — `validate_js.mjs` (1007) + `verify_edge.mjs` (1317).
 - 🟢 Headless react-native-web render harness (Screener / Portfolio / Markets / detail, zero errors).
 
 ---
 
 ## ⬜ Candidate — next
 
+### 🎯 Next up — multiple saved books (2nd portfolio / watchlist)
+Feasible, **🟡 medium** (~150–200 lines, no engine changes). Design:
+- Persist a `books` array — each `{ id, name, kind: 'portfolio' | 'watchlist', selected: [...] }` —
+  plus an `activeBook` id. Migration: the current single `selected` becomes book #1.
+- A **book switcher** (pills + "＋ New") on the Portfolio (and a compact active-book chip on the
+  Screener). Add / rename / delete / switch; long-press for rename/kind.
+- **Portfolio** books get HRP + caps + floor (today's view). **Watchlist** books are an unweighted
+  tracked list (momentum score + day change, no HRP) — lighter, for names you're eyeing.
+- Everything that reads `selected` (screener add/remove, basket cue, tab badge, HRP) routes through
+  the active book via two helpers (`activeSelected` / `setSelected`) to keep the change surface small.
+- Ranking window / score / chart settings stay **global**; only holdings are per-book. (Per-book caps
+  are a later nicety.)
+
 ### Ranking
-- 🟢 Risk-free rate input (true Sharpe numerator)
 - 🟡 Sector-relative ranking (rank within sector)
-- 🟡 Weighted blend (adjustable A/B weight instead of 50/50); value / quality as a third input
+- 🟡 Adjustable A/B blend weight (instead of 50/50); value / quality as a third input
 
 ### Weighting & risk
 - 🟡 Compare weighting schemes (HRP vs equal / inverse-vol / min-variance)
 - 🟡 Portfolio backtest line (weighted-basket cumulative return, vol, max drawdown)
 - 🟡 Correlation heatmap + diversification stats (effective number of bets)
-- 🟢 More constraints (max holdings, min weight, per-sector minimums)
+- 🟢 More constraints (max holdings / cardinality, per-sector minimums)
 
 ### Macro
-- 🟡 More symbols (DXY/UUP dollar, HYG credit, USO oil, BTC)
+- 🟡 More symbols (USO oil, BTC, DXY when available)
 - 🟢 Multi-range / benchmark compare on the chart
 
 ### Workflow & data
-- 🟡 Named portfolios + watchlist; export weights (CSV / card)
+- 🟢 Export weights (CSV / shareable card)
 - 🟡 Scheduled auto-refresh (GitHub Action on a cron, FMP key as a repo secret)
 - 🟡 Fundamentals (P/E, margins, growth) as filters/columns; custom / larger universes
 - 🔴 ⚙️ Standalone EAS build — home-screen icon, widgets, push (rebalance alerts)

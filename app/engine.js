@@ -193,12 +193,24 @@ function hrpWeights(R){
   return recursiveBisection(cov, order);
 }
 
-function applyCaps(weights, sectors, maxStock, maxSector){
+function applyCaps(weights, sectors, maxStock, maxSector, minStock){
   const tol=1e-9, n=weights.length;
+  minStock = minStock>0 ? minStock : 0;
   let w = weights.slice(); let sum=w.reduce((a,b)=>a+b,0); w=w.map(x=>x/sum);
   const secs=[...new Set(sectors)];
   if (maxStock>0 && maxStock*n < 1-tol)
     return {w, feasible:false, msg:`Infeasible: ${n} names capped at ${pct(maxStock)} hold at most ${pct(maxStock*n)}. Raise the stock cap to ≥ ${pct(1/n,1)} or add names.`};
+  if (minStock>0 && minStock*n > 1+tol)
+    return {w, feasible:false, msg:`Infeasible: ${n} names at a ${pct(minStock)} minimum need ${pct(minStock*n)}. Lower the minimum to ≤ ${pct(1/n,1)} or trim names.`};
+  if (minStock>0 && maxStock>0 && minStock > maxStock+tol)
+    return {w, feasible:false, msg:`Infeasible: the ${pct(minStock)} minimum exceeds the ${pct(maxStock)} stock cap.`};
+  if (minStock>0 && maxSector>0){
+    for (const s of secs){
+      let cnt=0; for (const x of sectors) if (x===s) cnt++;
+      if (cnt*minStock > maxSector+tol)
+        return {w, feasible:false, msg:`Infeasible: ${cnt} ${s} name${cnt>1?'s':''} at a ${pct(minStock)} minimum need ${pct(cnt*minStock)}, over the ${pct(maxSector)} sector cap.`};
+    }
+  }
   if (maxSector>0){
     // joint capacity: each sector can hold at most min(sectorCap, itsNames*stockCap).
     // If the sectors together can't reach 100%, the two caps are jointly infeasible
@@ -214,7 +226,7 @@ function applyCaps(weights, sectors, maxStock, maxSector){
         ? `Infeasible: a ${pct(maxStock)} stock cap with a ${pct(maxSector)} sector cap lets these ${secs.length} sector${secs.length>1?'s':''} hold at most ${pct(capacity)}. Loosen a cap, add names, or spread across more sectors.`
         : `Infeasible: ${secs.length} sector${secs.length>1?'s':''} capped at ${pct(maxSector)} hold at most ${pct(capacity)}. Raise the sector cap or diversify sectors.`};
   }
-  for (let iter=0; iter<1000; iter++){
+  for (let iter=0; iter<2000; iter++){
     let changed=false;
     if (maxStock>0){
       const over = w.map(x=>x>maxStock+tol);
@@ -227,13 +239,29 @@ function applyCaps(weights, sectors, maxStock, maxSector){
         changed=true;
       }
     }
+    if (minStock>0){
+      const under = w.map(x=>x<minStock-tol);
+      if (under.some(Boolean)){
+        let deficit=0; for (let i=0;i<n;i++) if (under[i]){ deficit+=minStock-w[i]; w[i]=minStock; }
+        // draw the shortfall from names above the floor, proportional to their headroom
+        const donors=[]; let ds=0;
+        for (let i=0;i<n;i++) if (!under[i] && w[i]>minStock+tol){ donors.push(i); ds+=w[i]-minStock; }
+        if (ds < deficit-tol) return {w, feasible:false, msg:'Infeasible: minimum weight leaves no capacity to redistribute. Lower the minimum or trim names.'};
+        for (const i of donors) w[i]-=deficit*((w[i]-minStock)/ds);
+        changed=true;
+      }
+    }
     if (maxSector>0){
       for (const s of secs){
         const mask = sectors.map(x=>x===s);
-        let tot=0; for (let i=0;i<n;i++) if (mask[i]) tot+=w[i];
+        let tot=0, cnt=0; for (let i=0;i<n;i++) if (mask[i]){ tot+=w[i]; cnt++; }
         if (tot>maxSector+tol){
-          const excess=tot-maxSector, scale=maxSector/tot;
-          for (let i=0;i<n;i++) if (mask[i]) w[i]*=scale;
+          // scale down only the portion above each name's floor, so no name drops
+          // below the minimum while the sector is brought to its cap
+          const floorTot=cnt*minStock, target=maxSector-floorTot, scalable=tot-floorTot;
+          const scale = scalable>tol ? Math.max(0, target)/scalable : 0;
+          const excess=tot-maxSector;
+          for (let i=0;i<n;i++) if (mask[i]) w[i]=minStock+(w[i]-minStock)*scale;
           const free=[]; let fs=0;
           for (let i=0;i<n;i++){
             if (mask[i]) continue;

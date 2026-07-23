@@ -218,24 +218,34 @@ def _cluster_var(cov, idx):
 
 # ---- Constraint redistribution -------------------------------------------
 def apply_caps(weights, sectors, max_stock=None, max_sector=None,
-               tol=1e-9, max_iter=1000):
-    """Iteratively cap individual & sector weights, redistributing capped
-    excess proportionally across uncapped names until total == 1.
+               min_stock=None, tol=1e-9, max_iter=2000):
+    """Iteratively cap individual & sector weights and floor individual weights,
+    redistributing proportionally across free names until total == 1.
 
     Returns (weights, feasible, message).
     """
     w = np.asarray(weights, float).copy()
     w = w / w.sum()
     n = len(w)
+    ms = min_stock if (min_stock and min_stock > 0) else 0.0
     sectors = list(sectors)
     uniq_sectors = sorted(set(sectors))
 
-    # Feasibility: sum of per-name caps must be >= 1, and sum of per-sector
-    # caps must be >= 1.
     if max_stock is not None and max_stock * n < 1 - tol:
         return w, False, (f"Infeasible: {n} names capped at {max_stock:.0%} "
                           f"can hold at most {max_stock*n:.0%}. Raise the stock "
                           f"cap to ≥ {1.0/n:.1%} or add names.")
+    if ms > 0 and ms * n > 1 + tol:
+        return w, False, (f"Infeasible: {n} names at a {ms:.1%} minimum need "
+                          f"{ms*n:.0%}. Lower the minimum or trim names.")
+    if ms > 0 and max_stock is not None and ms > max_stock + tol:
+        return w, False, "Infeasible: minimum exceeds the stock cap."
+    if ms > 0 and max_sector is not None:
+        for s in uniq_sectors:
+            cnt = sum(1 for x in sectors if x == s)
+            if cnt * ms > max_sector + tol:
+                return w, False, (f"Infeasible: {cnt} {s} names at {ms:.1%} need "
+                                  f"{cnt*ms:.0%}, over the {max_sector:.0%} sector cap.")
     if max_sector is not None:
         # joint capacity: each sector holds at most min(sector_cap, its_names*stock_cap)
         capacity = 0.0
@@ -261,15 +271,31 @@ def apply_caps(weights, sectors, max_stock=None, max_sector=None,
                     return w, False, "Infeasible: stock cap leaves no capacity."
                 w[free] += excess * (w[free] / w[free].sum())
                 changed = True
-        # ---- sector caps ----
+        # ---- stock floor ----
+        if ms > 0:
+            under = w < ms - tol
+            if under.any():
+                deficit = (ms - w[under]).sum()
+                w[under] = ms
+                donors = (~under) & (w > ms + tol)
+                head = (w[donors] - ms)
+                if head.sum() < deficit - tol:
+                    return w, False, ("Infeasible: minimum weight leaves no "
+                                      "capacity to redistribute.")
+                w[donors] -= deficit * (head / head.sum())
+                changed = True
+        # ---- sector caps (min-aware scaling) ----
         if max_sector is not None:
             for s in uniq_sectors:
                 mask = np.array([sc == s for sc in sectors])
                 tot = w[mask].sum()
                 if tot > max_sector + tol:
                     excess = tot - max_sector
-                    w[mask] *= max_sector / tot
-                    # redistribute to names in other sectors below stock cap
+                    cnt = int(mask.sum())
+                    floor_tot = cnt * ms
+                    scalable = tot - floor_tot
+                    scale = max(0.0, max_sector - floor_tot) / scalable if scalable > tol else 0.0
+                    w[mask] = ms + (w[mask] - ms) * scale
                     free = ~mask
                     if max_stock is not None:
                         free = free & (w < max_stock - tol)

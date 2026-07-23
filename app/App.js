@@ -222,6 +222,7 @@ function normalizeState(saved) {
     selected: Array.isArray(saved.selected) ? saved.selected : [],
     maxStock: saved.maxStock ?? 0,
     maxSector: saved.maxSector ?? 0,
+    minStock: saved.minStock ?? 0,
     mode: ['sharpe', 'return', 'vol'].includes(saved.mode) ? saved.mode : 'sharpe',
     removeMkt: !!saved.removeMkt,
     matchVol: saved.matchVol == null ? true : !!saved.matchVol,
@@ -765,14 +766,16 @@ function FilterSheet({ C, visible, onClose, st, setFilter }) {
 /* ====================== Portfolio ====================== */
 function Portfolio({ C, snap, st, persist, onOpen, refreshing, onRefresh }) {
   const BYSYM = useMemo(() => Object.fromEntries(snap.tickers.map(t => [t.symbol, t])), [snap]);
-  const pf = useMemo(() => computePortfolio(snap, BYSYM, st), [snap, st.selected, st.asof, st.maxStock, st.maxSector]);
+  const pf = useMemo(() => computePortfolio(snap, BYSYM, st), [snap, st.selected, st.asof, st.maxStock, st.maxSector, st.minStock]);
   const colorFor = useMemo(() => makeColorFor(), [snap]);
 
   const setCap = (key, d) => {
-    let v = st[key];
-    if (v === 0 && d > 0) v = key === 'maxStock' ? 0.25 : 0.40;
-    else v = Math.round((v + d * 0.05) * 100) / 100;
-    if (v < 0.05) v = 0;
+    const step = key === 'minStock' ? 0.005 : 0.05;         // min weight scales by 0.5%
+    const onDefault = key === 'maxStock' ? 0.25 : key === 'maxSector' ? 0.40 : 0.005;
+    let v = st[key] || 0;
+    if (v === 0 && d > 0) v = onDefault;
+    else v = Math.round((v + d * step) * 1000) / 1000;
+    if (v < step) v = 0;                                     // step below the smallest → Off
     if (v > 1) v = 1;
     haptic('select');
     persist({ ...st, [key]: v });
@@ -817,8 +820,11 @@ function Portfolio({ C, snap, st, persist, onOpen, refreshing, onRefresh }) {
         <Stepper C={C} label="Max sector weight" sub="per-sector cap" border
           value={st.maxSector ? E.pct(st.maxSector) : 'Off'}
           onDec={() => setCap('maxSector', -1)} onInc={() => setCap('maxSector', 1)} />
+        <Stepper C={C} label="Min stock weight" sub="per-name floor · 0.5% steps" border
+          value={st.minStock ? E.pct(st.minStock, 1) : 'Off'}
+          onDec={() => setCap('minStock', -1)} onInc={() => setCap('minStock', 1)} />
         <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 8, lineHeight: 16 }}>
-          Long-only Hierarchical Risk Parity on the latest 252 trading days (as-of), independent of the ranking skip window. Capped excess is redistributed proportionally until weights total exactly 100%.
+          Long-only Hierarchical Risk Parity on the latest 252 trading days (as-of), independent of the ranking skip window. Weights are redistributed to honor the caps and the floor and total exactly 100%.
         </Text>
       </Card>
 
@@ -912,7 +918,7 @@ function computePortfolio(snap, BYSYM, st) {
   }
   const w = E.hrpWeights(R);
   const sectors = syms.map(s => BYSYM[s].sector);
-  const capped = E.applyCaps(w, sectors, st.maxStock, st.maxSector);
+  const capped = E.applyCaps(w, sectors, st.maxStock, st.maxSector, st.minStock);
   return { syms, weights: capped.w, feasible: capped.feasible, msg: capped.msg, sectors };
 }
 
@@ -1385,7 +1391,7 @@ function MacroTile({ C, meta, ser, selected, onPress }) {
       style={[styles.tile, { backgroundColor: C.surface, borderColor: selected ? C.accent : 'transparent', borderWidth: selected ? 1.5 : StyleSheet.hairlineWidth }]}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={[styles.tick, { color: C.text, fontSize: 16 }]}>{meta.symbol}</Text>
+          <Text style={[styles.tick, { color: C.text, fontSize: 16 }]}>{meta.disp || meta.symbol}</Text>
           <Text numberOfLines={1} style={{ color: C.faint, fontSize: 10.5, marginTop: 1 }}>{meta.label}</Text>
         </View>
         <Spark C={C} vals={day.closes} up={up} />
@@ -1434,7 +1440,7 @@ function Macro({ C, snap, st, persist, refreshing, onRefresh }) {
 
       <View style={[styles.cardPanel, { backgroundColor: C.surface, padding: 16, marginTop: 2 }]}>
         <View style={{ marginBottom: 10 }}>
-          <Text style={{ color: C.text, fontSize: 18, fontWeight: '800' }}>{meta.symbol} · {meta.label}</Text>
+          <Text style={{ color: C.text, fontSize: 18, fontWeight: '800' }}>{(meta.disp || meta.symbol)} · {meta.label}</Text>
           <Text style={{ color: C.faint, fontSize: 12, marginTop: 1 }}>{meta.desc}</Text>
         </View>
         <MacroChart C={C} ser={ser} tf={st.macroTf} type={st.macroType}
