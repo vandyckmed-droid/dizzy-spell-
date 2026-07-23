@@ -30,10 +30,11 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
   show their nearest twin; diversifiers (low ρ) get a teal dot & add button. Thresholds are
   **user-configurable** (default: diversify < 0.45, redundant ≥ 0.60) via the cue sheet.
 - 🟢 Sort & filter (market-cap band, exchange); selection persisted **by date** (survives rebuilds).
-- 🟢 **Tap-to-select** rows (tap anywhere → adds/removes with a light haptic; a trailing **›**
-  opens the detail; selected shown by an accent bar + row tint) — replaced the checkmark button
-  (and the earlier swipe gesture). Dual windows render as **two clean color-coded scores** (separate)
-  or one blended score (blend), with a color legend at the top instead of per-row labels.
+- 🟢 **Checkmark select** — a round ＋ / ✓ button toggles a name into the basket (with a little
+  bounce and a haptic); tapping the row body opens the detail. The button picks up the basket cue
+  (teal when the name diversifies, filled green once held). Dual windows render as **two clean
+  color-coded scores** (separate) or one blended score (blend), with a color legend at the top
+  instead of per-row labels. (Tried swipe- and tap-to-select; the checkmark won.)
 
 ### Portfolio & weighting
 - 🟡 Long-only **HRP** (stabilized corr → √((1−ρ)/2) → average linkage → quasi-diagonalization →
@@ -100,7 +101,7 @@ Feasible, **🟡 medium** (~150–200 lines, no engine changes). Design:
 - 🟡 Compare weighting schemes (HRP vs equal / inverse-vol / min-variance)
 - 🟡 Portfolio backtest line (weighted-basket cumulative return, vol, max drawdown)
 - 🟡 Correlation heatmap (effective bets already shipped on the Portfolio)
-- 🟢 Swipe-to-hide rows on the Screener (with a reset) — deferred; tap-to-select shipped
+- 🟢 Swipe-to-hide rows on the Screener (with a reset) — deferred; checkmark select shipped
 - 🟢 More constraints (max holdings / cardinality, per-sector minimums)
 
 ### Macro
