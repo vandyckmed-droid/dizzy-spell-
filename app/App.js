@@ -21,7 +21,7 @@ import snapshot from './snapshot.json';   // bundled, key-free market-data snaps
 const STORE_KEY = 'sms.state.v1';
 // Latest snapshot on the public repo — used by pull-to-refresh (bundled copy is the fallback).
 const DATA_URL =
-  'https://raw.githubusercontent.com/vandyckmed-droid/dizzy-spell-/refs/heads/claude/iphone-portfolio-screener-hrp-hf3nj3/data/snapshot.json';
+  'https://raw.githubusercontent.com/vandyckmed-droid/dizzy-spell-/refs/heads/main/data/snapshot.json';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -78,8 +78,21 @@ function cfgOf(st, betaWindow) {
     betaWindow: betaWindow || 756,
   };
 }
+// second window shares the mode / market-removal settings but uses its own
+// return offsets, with volatility matched to that same window
+function cfgOfB(st, betaWindow) {
+  return {
+    retStart: st.bStart, retEnd: st.bEnd,
+    volStart: st.bStart, volEnd: st.bEnd,
+    matchVol: true, mode: st.mode, removeMkt: st.removeMkt,
+    betaWindow: betaWindow || 756,
+  };
+}
+// months-style window label, e.g. 250→20 ⇒ "12–1", 126→20 ⇒ "6–1"
+const winLabel = (start, end) => `${Math.round(start / 21)}–${Math.round(end / 21)}`;
 function marketReturns(snap) {
-  const pool = snap.tickers.filter(t => t.universes.includes('us_top500'));
+  const primary = Object.keys(snap.universes)[0];
+  const pool = snap.tickers.filter(t => t.universes.includes(primary));
   const totalCap = pool.reduce((a, t) => a + (t.marketCap || 0), 0) || 1;
   const M = snap.dates.length - 1;
   const mret = new Array(M).fill(0);
@@ -217,6 +230,15 @@ function normalizeState(saved) {
     sortDir: saved.sortDir || 'desc',
     capBand: saved.capBand || 'all',
     exch: Array.isArray(saved.exch) ? saved.exch : [],
+    // second (blended / side-by-side) return window — default 6–1
+    winB: saved.winB == null ? true : !!saved.winB,
+    bStart: saved.bStart ?? 126,
+    bEnd: saved.bEnd ?? 20,
+    dualMode: ['blend', 'separate'].includes(saved.dualMode) ? saved.dualMode : 'separate',
+    // basket-correlation cue thresholds (max daily-return ρ vs a held name)
+    cueOn: saved.cueOn == null ? true : !!saved.cueOn,
+    divRho: saved.divRho ?? 0.45,
+    redRho: saved.redRho ?? 0.60,
     // macro dashboard prefs
     macroSym: saved.macroSym || null,
     macroTf: MACRO_TFS.includes(saved.macroTf) ? saved.macroTf : '1D',
@@ -225,6 +247,7 @@ function normalizeState(saved) {
     ema1P: saved.ema1P ?? 50,
     ema2On: saved.ema2On == null ? true : !!saved.ema2On,
     ema2P: saved.ema2P ?? 200,
+    maCross: saved.maCross == null ? true : !!saved.maCross,
   };
 }
 function clampState(s, snap) {
@@ -240,7 +263,9 @@ function clampState(s, snap) {
   const end = Math.max(1, Math.min(start - 2, s.end | 0));
   const volStart = Math.max(3, Math.min(N - 1, s.volStart | 0));
   const volEnd = Math.max(1, Math.min(volStart - 2, s.volEnd | 0));
-  return { ...s, universe: uni, asof, asofDate: snap.dates[asof], start, end, volStart, volEnd };
+  const bStart = Math.max(3, Math.min(N - 1, s.bStart | 0));
+  const bEnd = Math.max(1, Math.min(bStart - 2, s.bEnd | 0));
+  return { ...s, universe: uni, asof, asofDate: snap.dates[asof], start, end, volStart, volEnd, bStart, bEnd };
 }
 function toggleSel(st, sym) {
   const set = new Set(st.selected);
@@ -252,6 +277,7 @@ function toggleSel(st, sym) {
 /* ====================== Screener ====================== */
 function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refreshing, onRefresh }) {
   const [filterOpen, setFilterOpen] = useState(false);
+  const [cueOpen, setCueOpen] = useState(false);
   const pulse = useRef(new Animated.Value(1)).current;
   const dir = st.sortDir === 'asc' ? 1 : -1;
   const betaWindow = snap.betaWindow || 756;
@@ -263,6 +289,8 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
     const band = CAP_BANDS.find(b => b.key === st.capBand) || CAP_BANDS[0];
     const exchSet = st.exch && st.exch.length ? new Set(st.exch) : null;
     const c = cfgOf(st, betaWindow);
+    const cB = cfgOfB(st, betaWindow);
+    const blend = st.winB && st.dualMode === 'blend';
     const out = [];
     let hidden = 0;
     for (const t of snap.tickers) {
@@ -272,10 +300,14 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
         if (c.removeMkt && E.momentumDaily(t.closes, st.asof, st.start, st.end)) hidden++;
         continue;
       }
-      out.push({ t, m: r });
+      const rB = st.winB ? E.momentumScore(t.closes, market, st.asof, cB) : null;
+      const rbOk = rB && rB.score != null && !Number.isNaN(rB.score);
+      // ranking basis: blended average of the two windows, else primary window A
+      const score = blend && rbOk ? (r.score + rB.score) / 2 : r.score;
+      out.push({ t, m: r, mB: rbOk ? rB : null, score });
     }
     out.sort((a, b) => {
-      const av = a.m.score, bv = b.m.score;
+      const av = a.score, bv = b.score;
       const an = av == null || Number.isNaN(av), bn = bv == null || Number.isNaN(bv);
       if (an && bn) return 0; if (an) return 1; if (bn) return -1;
       return dir * (av - bv);
@@ -283,7 +315,8 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
     out.forEach((o, i) => (o.rank = i + 1));
     return { rows: out, hidden };
   }, [snap, market, betaWindow, st.universe, st.asof, st.start, st.end, st.volStart, st.volEnd,
-      st.matchVol, st.mode, st.removeMkt, st.capBand, st.exch, st.sortDir]);
+      st.matchVol, st.mode, st.removeMkt, st.capBand, st.exch, st.sortDir,
+      st.winB, st.dualMode, st.bStart, st.bEnd]);
 
   const q = query.trim().toUpperCase();
   const displayed = useMemo(() =>
@@ -315,6 +348,12 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
     let next = { ...st, ...patch };
     next.volStart = Math.max(next.volEnd + 2, Math.min(snap.dates.length - 1, next.volStart));
     next.volEnd = Math.max(1, Math.min(next.volStart - 2, next.volEnd));
+    haptic('select'); persist(next);
+  };
+  const setWinB = (patch) => {
+    let next = { ...st, ...patch };
+    next.bStart = Math.max(next.bEnd + 2, Math.min(snap.dates.length - 1, next.bStart));
+    next.bEnd = Math.max(1, Math.min(next.bStart - 2, next.bEnd));
     haptic('select'); persist(next);
   };
   const setMode = (m) => { animateNext(); haptic('select'); persist({ ...st, mode: m, sortDir: m === 'vol' ? 'asc' : 'desc' }); };
@@ -384,6 +423,32 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
         <ScoreNote C={C} snap={snap} st={st} />
       </Card>
 
+      <Card C={C}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Eyebrow C={C}>Second window · {winLabel(st.bStart, st.bEnd)}</Eyebrow>
+          <Switch value={st.winB} onValueChange={(v) => { animateNext(); haptic('select'); persist({ ...st, winB: v }); }}
+            trackColor={{ false: C.surface2, true: C.accent }} thumbColor="#fff" ios_backgroundColor={C.surface2} />
+        </View>
+        {st.winB ? (
+          <>
+            <Text style={{ color: C.muted, fontSize: 12.5, marginTop: 6, marginBottom: 8 }}>
+              Combine the two windows into one score, or show them side by side.
+            </Text>
+            <SegBar C={C} value={st.dualMode} onChange={(k) => { animateNext(); haptic('select'); persist({ ...st, dualMode: k }); }}
+              options={[{ key: 'blend', label: 'Blend' }, { key: 'separate', label: 'Separate' }]} />
+            <Stepper C={C} border label="B · start offset" sub="days ago window opens" value={String(st.bStart)}
+              onDec={() => setWinB({ bStart: st.bStart - 1 })} onInc={() => setWinB({ bStart: st.bStart + 1 })} />
+            <Stepper C={C} border label="B · end offset" sub="days ago window closes (skip)" value={String(st.bEnd)}
+              onDec={() => setWinB({ bEnd: st.bEnd - 1 })} onInc={() => setWinB({ bEnd: st.bEnd + 1 })} />
+            <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 8, lineHeight: 16 }}>
+              {st.dualMode === 'blend'
+                ? `Ranking by the average of ${winLabel(st.start, st.end)} and ${winLabel(st.bStart, st.bEnd)} ${st.mode}.`
+                : `Ranking by ${winLabel(st.start, st.end)}; ${winLabel(st.bStart, st.bEnd)} shown alongside.`}
+            </Text>
+          </>
+        ) : null}
+      </Card>
+
       <View style={styles.countLine}>
         <Text style={{ color: C.muted, fontSize: 12 }}>
           <Text style={{ color: C.text, fontWeight: '700' }}>{displayed.length}</Text> ranked · {selInView} selected here{st.removeMkt && hidden ? ` · ${hidden} n/a` : ''}
@@ -405,10 +470,16 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
         </View>
       </View>
       {st.selected.length ? (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 6, paddingBottom: 8 }}>
-          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: C.div }} />
-          <Text style={{ color: C.faint, fontSize: 11 }}>diversifies vs basket · faded ≈ a name you hold (latest 252d)</Text>
-        </View>
+        <Pressable onPress={() => setCueOpen(true)} accessibilityLabel="Basket cue settings"
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 6, paddingBottom: 8 }}>
+          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: st.cueOn ? C.div : C.faint }} />
+          <Text style={{ color: C.faint, fontSize: 11 }}>
+            {st.cueOn
+              ? `diversifies < ${st.divRho.toFixed(2)} · faded ≈ held ≥ ${st.redRho.toFixed(2)} ρ`
+              : 'basket cue off'}
+          </Text>
+          <Text style={{ color: C.accent, fontSize: 11, fontWeight: '700' }}>· adjust</Text>
+        </Pressable>
       ) : null}
     </View>
   );
@@ -426,48 +497,75 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} />}
         renderItem={({ item }) => (
           <RankCard C={C} o={item} mode={st.mode} removeMkt={st.removeMkt} selected={selSet.has(item.t.symbol)}
-            corr={selSet.has(item.t.symbol) ? null : corrMap.get(item.t.symbol)} hasBasket={st.selected.length > 0}
+            corr={selSet.has(item.t.symbol) ? null : corrMap.get(item.t.symbol)}
+            active={st.selected.length > 0 && st.cueOn} divRho={st.divRho} redRho={st.redRho}
+            dual={{ on: st.winB, mode: st.dualMode, aLabel: winLabel(st.start, st.end), bLabel: winLabel(st.bStart, st.bEnd) }}
             onOpen={() => onOpen(item.t.symbol)}
             onToggle={() => persist(toggleSel(st, item.t.symbol))} />
         )} />
 
       <FilterSheet C={C} visible={filterOpen} onClose={() => setFilterOpen(false)}
         st={st} setFilter={setFilter} />
+      <CueSheet C={C} visible={cueOpen} onClose={() => setCueOpen(false)} st={st} persist={persist} />
     </Animated.View>
   );
 }
 
-// correlation-with-basket thresholds (max daily-return ρ vs a held name)
-const RHO_DIV = 0.35;   // below → diversifying, flag it
-const RHO_RED = 0.60;   // at/above → redundant, fade it (deeper fade as ρ→0.9)
-function rankCue(corr, hasBasket) {
-  if (!hasBasket || !corr || corr.rho == null) return { opacity: 1, kind: null };
+// Basket-correlation cue controls: on/off + the two ρ thresholds (0.05 steps).
+function CueSheet({ C, visible, onClose, st, persist }) {
+  const set = (patch) => { haptic('select'); persist({ ...st, ...patch }); };
+  const r2 = (x) => Math.round(x * 100) / 100;
+  const setDiv = (d) => set({ divRho: Math.max(0.1, Math.min(st.redRho - 0.05, r2(d))) });
+  const setRed = (d) => set({ redRho: Math.max(st.divRho + 0.05, Math.min(0.95, r2(d))) });
+  return (
+    <Sheet C={C} visible={visible} onClose={onClose}>
+      <Text style={[styles.sheetTitle, { color: C.text }]}>Basket cue</Text>
+      <Text style={{ color: C.muted, fontSize: 12.5, marginBottom: 6 }}>
+        As you scroll, names are compared to your basket by max daily-return correlation (latest 252d).
+      </Text>
+      <ToggleRow C={C} label="Show cue" sub="fade the redundant, flag the diversifiers"
+        value={st.cueOn} onChange={(v) => set({ cueOn: v })} />
+      {st.cueOn ? (
+        <>
+          <Stepper C={C} border label="Diversifies below" sub="teal dot when ρ is under this" value={st.divRho.toFixed(2)}
+            onDec={() => setDiv(st.divRho - 0.05)} onInc={() => setDiv(st.divRho + 0.05)} />
+          <Stepper C={C} border label="Redundant above" sub="fade + ≈ twin when ρ is over this" value={st.redRho.toFixed(2)}
+            onDec={() => setRed(st.redRho - 0.05)} onInc={() => setRed(st.redRho + 0.05)} />
+          <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 8, lineHeight: 16 }}>
+            Higher “diversifies below” lets more names qualify as diversifiers. Names between the two
+            thresholds are left neutral.
+          </Text>
+        </>
+      ) : null}
+    </Sheet>
+  );
+}
+
+// correlation-with-basket cue: fade redundant names, flag diversifiers.
+// Thresholds are user-configurable (divRho / redRho).
+function rankCue(corr, active, divRho, redRho) {
+  if (!active || !corr || corr.rho == null) return { opacity: 1, kind: null };
   const rho = corr.rho;
-  if (rho >= RHO_RED) {
-    const opacity = Math.max(0.42, 0.82 - ((rho - RHO_RED) / 0.30) * 0.40);
+  if (rho >= redRho) {
+    const opacity = Math.max(0.42, 0.82 - ((rho - redRho) / Math.max(0.05, 0.9 - redRho)) * 0.40);
     return { opacity, kind: 'redundant', twin: corr.twin };
   }
-  if (rho < RHO_DIV) return { opacity: 1, kind: 'div' };
+  if (rho < divRho) return { opacity: 1, kind: 'div' };
   return { opacity: 1, kind: null };
 }
 
-function RankCard({ C, o, mode, removeMkt, selected, corr, hasBasket, onOpen, onToggle }) {
-  const { t, m, rank } = o;
-  const cue = rankCue(corr, hasBasket);
+// the score's display string + color under the active ranking mode
+function metricStr(v, mode) {
+  if (v == null || Number.isNaN(v)) return '—';
+  return mode === 'return' ? E.signPct(v, 0) : mode === 'vol' ? E.pct(v, 0) : E.fmtSharpe(v);
+}
+const metricColor = (v, mode, C) => mode === 'vol' ? C.text : (v >= 0 ? C.gain : C.loss);
+
+function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRho, dual, onOpen, onToggle }) {
+  const { t, m, mB, rank } = o;
+  const cue = rankCue(corr, active, divRho, redRho);
   const vol = m.annVol != null ? E.pct(m.annVol, 0) : '—';
   const rp = (removeMkt ? 'α ' : '');   // α = residual (market-neutral) return
-  // big number = the score under the active mode; sub-line = context metrics
-  let big, bigColor, sub;
-  if (mode === 'return') {
-    big = E.signPct(m.annRet, 0); bigColor = m.annRet >= 0 ? C.gain : C.loss;
-    sub = `σ ${vol} · ${rp}${E.signPct(m.cum, 0)} cum`;
-  } else if (mode === 'vol') {
-    big = vol; bigColor = C.text;
-    sub = `${rp}${E.signPct(m.annRet, 0)} ann. ret`;
-  } else {
-    big = E.fmtSharpe(m.score); bigColor = m.score >= 0 ? C.gain : C.loss;
-    sub = `${rp}${E.signPct(m.annRet, 0)} · σ ${vol}`;
-  }
   const scale = useRef(new Animated.Value(1)).current;
   const onSel = () => {
     Animated.sequence([
@@ -476,6 +574,44 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, hasBasket, onOpen, on
     ]).start();
     onToggle();
   };
+  // right column: single value + context (default), or the two windows
+  let right;
+  if (dual && dual.on) {
+    const aVal = m.score, bVal = mB ? mB.score : null;
+    if (dual.mode === 'blend') {
+      const blended = o.score;
+      right = (
+        <View style={{ alignItems: 'flex-end', minWidth: 96 }}>
+          <Text style={[styles.metricSub, { color: C.faint }]}>{dual.aLabel} + {dual.bLabel}</Text>
+          <Text style={[styles.big, { color: metricColor(blended, mode, C) }]}>{metricStr(blended, mode)}</Text>
+          <Text style={[styles.metricSub, { color: C.muted }]}>
+            {dual.aLabel} {metricStr(aVal, mode)} · {dual.bLabel} {metricStr(bVal, mode)}
+          </Text>
+        </View>
+      );
+    } else {
+      right = (
+        <View style={{ alignItems: 'flex-end', minWidth: 96 }}>
+          <Text style={[styles.metricSub, { color: C.faint }]}>{dual.aLabel}</Text>
+          <Text style={[styles.big, { color: metricColor(aVal, mode, C) }]}>{metricStr(aVal, mode)}</Text>
+          <Text style={[styles.metricSub, { color: C.faint }]}>
+            {dual.bLabel} <Text style={{ color: mB ? metricColor(bVal, mode, C) : C.faint }}>{metricStr(bVal, mode)}</Text>
+          </Text>
+        </View>
+      );
+    }
+  } else {
+    let big, sub;
+    if (mode === 'return') { big = E.signPct(m.annRet, 0); sub = `σ ${vol} · ${rp}${E.signPct(m.cum, 0)} cum`; }
+    else if (mode === 'vol') { big = vol; sub = `${rp}${E.signPct(m.annRet, 0)} ann. ret`; }
+    else { big = E.fmtSharpe(m.score); sub = `${rp}${E.signPct(m.annRet, 0)} · σ ${vol}`; }
+    right = (
+      <View style={{ alignItems: 'flex-end', minWidth: 84 }}>
+        <Text style={[styles.big, { color: metricColor(mode === 'vol' ? 0 : m.annRet, mode, C) }]}>{big}</Text>
+        <Text style={[styles.metricSub, { color: C.muted }]}>{sub}</Text>
+      </View>
+    );
+  }
   return (
     <View style={[styles.card, { backgroundColor: selected ? C.accentSoft : 'transparent', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line }]}>
       <Pressable style={[styles.cardTap, { opacity: cue.opacity }]} onPress={onOpen} hitSlop={4}>
@@ -492,10 +628,7 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, hasBasket, onOpen, on
             {cue.kind === 'div' ? <Text style={{ color: C.div }}>  diversifies</Text> : null}
           </Text>
         </View>
-        <View style={{ alignItems: 'flex-end', minWidth: 84 }}>
-          <Text style={[styles.big, { color: bigColor }]}>{big}</Text>
-          <Text style={[styles.metricSub, { color: C.muted }]}>{sub}</Text>
-        </View>
+        {right}
       </Pressable>
       <Pressable onPress={onSel} hitSlop={8} accessibilityRole="button"
         accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${t.symbol}${cue.kind === 'div' ? ', diversifies your basket' : cue.kind === 'redundant' ? `, correlated with ${cue.twin}` : ''}`}>
@@ -788,7 +921,7 @@ function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen, onSector 
   const t = snap.tickers.find(x => x.symbol === sym);
   const insets = useSafeAreaInsets();
   const peers = useMemo(() =>
-    t ? topCorrelated(t, snap.tickers.filter(x => x.universes.includes('us_top500')), st.asof, 3) : [],
+    t ? topCorrelated(t, snap.tickers, st.asof, 3) : [],
     [snap, t, st.asof]);
   if (!t) return null;
   const inPf = st.selected.includes(sym);
@@ -1043,7 +1176,7 @@ function macroView(ser, tf) {
 
 const fmtLabel = (s, intraday) => !s ? '' : (intraday ? s.slice(11, 16) : shortDate(s));
 
-function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P }) {
+function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P, maCross }) {
   const [w, setW] = useState(0);
   const [idx, setIdx] = useState(null);
   const H = 244, padX = 8, padTop = 16, padBot = 22;
@@ -1105,6 +1238,26 @@ function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P }) {
     return d;
   };
 
+  // golden/death-cross effect: a regime ribbon (fast>slow green, fast<slow red)
+  // along the base + a diamond marker at each crossover of the two EMAs
+  const crossFx = daily && maCross && ema1 && ema2;
+  let bull = '', bear = '';
+  const crosses = [];
+  const yRib = H - padBot + 8;
+  if (crossFx && w > 0 && n > 1) {
+    for (let i = 0; i < n; i++) {
+      const a = ema1[i], b = ema2[i];
+      if (a == null || b == null) continue;
+      const upNow = a >= b;
+      const x1 = X(Math.max(0, i - 0.5)), x2 = X(Math.min(n - 1, i + 0.5));
+      const seg = `M ${x1} ${yRib} L ${x2} ${yRib} `;
+      if (upNow) bull += seg; else bear += seg;
+      if (i > 0 && ema1[i - 1] != null && ema2[i - 1] != null && (ema1[i - 1] >= ema2[i - 1]) !== upNow) {
+        crosses.push({ x: X(i), y: Y(a), golden: upNow });
+      }
+    }
+  }
+
   return (
     <View>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 8 }}>
@@ -1146,8 +1299,14 @@ function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P }) {
             {type === 'line' ? <Path d={line} stroke={col} strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" /> : null}
             {type === 'ohlc' ? <Path d={upP} stroke={C.gain} strokeWidth="1.5" fill="none" /> : null}
             {type === 'ohlc' ? <Path d={dnP} stroke={C.loss} strokeWidth="1.5" fill="none" /> : null}
+            {crossFx ? <Path d={bull} stroke={C.gain} strokeWidth="3" fill="none" strokeOpacity="0.9" strokeLinecap="round" /> : null}
+            {crossFx ? <Path d={bear} stroke={C.loss} strokeWidth="3" fill="none" strokeOpacity="0.9" strokeLinecap="round" /> : null}
             {ema1 ? <Path d={emaPath(ema1)} stroke={EMA_COLORS[0]} strokeWidth="1.6" fill="none" strokeOpacity="0.95" /> : null}
             {ema2 ? <Path d={emaPath(ema2)} stroke={EMA_COLORS[1]} strokeWidth="1.6" fill="none" strokeOpacity="0.95" /> : null}
+            {crossFx ? crosses.map((cr, i) => (
+              <Path key={i} d={`M ${cr.x} ${cr.y - 5} L ${cr.x + 5} ${cr.y} L ${cr.x} ${cr.y + 5} L ${cr.x - 5} ${cr.y} Z`}
+                fill={cr.golden ? '#FFD60A' : C.loss} stroke={C.surface} strokeWidth="1" />
+            )) : null}
             <SvgText x={padX} y={H - 5} fontSize="9" fontWeight="600" fill={C.faint} textAnchor="start">{fmtLabel(v.labels[0], v.isIntraday)}</SvgText>
             <SvgText x={w - padX} y={H - 5} fontSize="9" fontWeight="600" fill={C.faint} textAnchor="end">{fmtLabel(v.labels[n - 1], v.isIntraday)}</SvgText>
             {idx != null ? <Line x1={X(active)} y1={padTop - 6} x2={X(active)} y2={H - padBot} stroke={C.text} strokeOpacity="0.4" strokeWidth="1" /> : null}
@@ -1159,9 +1318,11 @@ function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P }) {
       <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginTop: 8 }}>
         {daily && ema1On ? <Legend C={C} color={EMA_COLORS[0]} text={`EMA ${ema1P}`} /> : null}
         {daily && ema2On ? <Legend C={C} color={EMA_COLORS[1]} text={`EMA ${ema2P}`} /> : null}
-        <Text style={{ color: C.faint, fontSize: 11 }}>
-          {v.isIntraday ? '5-min bars · dashed = prev close · touch to inspect' : 'touch & drag to inspect'}
-        </Text>
+        {crossFx ? <Text style={{ color: C.faint, fontSize: 11 }}>◆ golden / death cross · regime ribbon</Text> : (
+          <Text style={{ color: C.faint, fontSize: 11 }}>
+            {v.isIntraday ? '5-min bars · dashed = prev close · touch to inspect' : 'touch & drag to inspect'}
+          </Text>
+        )}
       </View>
     </View>
   );
@@ -1277,7 +1438,7 @@ function Macro({ C, snap, st, persist, refreshing, onRefresh }) {
           <Text style={{ color: C.faint, fontSize: 12, marginTop: 1 }}>{meta.desc}</Text>
         </View>
         <MacroChart C={C} ser={ser} tf={st.macroTf} type={st.macroType}
-          ema1On={st.ema1On} ema1P={st.ema1P} ema2On={st.ema2On} ema2P={st.ema2P} />
+          ema1On={st.ema1On} ema1P={st.ema1P} ema2On={st.ema2On} ema2P={st.ema2P} maCross={st.maCross} />
         <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
           <View style={{ flex: 1 }}>
             <SegBar C={C} value={st.macroTf} onChange={(k) => setP({ macroTf: k })}
@@ -1296,6 +1457,9 @@ function Macro({ C, snap, st, persist, refreshing, onRefresh }) {
               onToggle={(v) => setP({ ema1On: v })} onSet={(p) => setP({ ema1P: p })} border />
             <EmaRow C={C} color={EMA_COLORS[1]} on={st.ema2On} period={st.ema2P}
               onToggle={(v) => setP({ ema2On: v })} onSet={(p) => setP({ ema2P: p })} border />
+            <ToggleRow C={C} border label="Golden / death cross"
+              sub={st.ema1On && st.ema2On ? 'regime ribbon + cross markers' : 'needs both EMAs on'}
+              value={st.maCross} onChange={(v) => setP({ maCross: v })} />
           </View>
         )}
       </View>

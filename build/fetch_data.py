@@ -48,8 +48,8 @@ os.makedirs(DATA_DIR, exist_ok=True)
 HISTORY_TRADING_DAYS = 800          # embedded trailing window (covers the 756d residual beta window)
 RECENT_MIN = 300                    # min recent valid days to be eligible (ranking/detail)
 MARKET_SYMBOL = "VTI"               # fixed market proxy for residual momentum (total US market)
-TARGET = 500                        # retained eligible companies
-CANDIDATE_HEADROOM = 850            # profiles fetched before history trim
+TARGET = 600                        # retained eligible companies
+CANDIDATE_HEADROOM = 1050           # profiles fetched before history trim
 MAJOR_EXCHANGES = {"NASDAQ", "NYSE", "AMEX"}
 MIN_SECTOR_FOR_UNIVERSE = 14        # a sector becomes a sub-universe at this count
 MAX_DAILY_MOVE = 0.80               # a larger single-day move ⇒ erroneous data
@@ -301,18 +301,20 @@ def main():
     market = [round(mcloses[k + 1] / mcloses[k] - 1, 6) for k in range(len(mcloses) - 1)]
     print(f"  {MARKET_SYMBOL}: {len(market)} daily returns")
 
-    # ---- universes: Top 500 + dynamic sector sub-universes ----
+    # ---- universes: Top N + dynamic sector sub-universes ----
+    n_eligible = len(eligible)
+    top_id = f"us_top{n_eligible}"
     sector_counts = {}
     for t in eligible:
         sector_counts[t["sector"]] = sector_counts.get(t["sector"], 0) + 1
-    universes = {"us_top500": {"label": "US Top 500",
-                               "note": "Largest 500 eligible common stocks & ADRs on NYSE/Nasdaq/AMEX."}}
+    universes = {top_id: {"label": f"US Top {n_eligible}",
+                          "note": f"Largest {n_eligible} eligible common stocks & ADRs on NYSE/Nasdaq/AMEX."}}
     for sec, cnt in sorted(sector_counts.items(), key=lambda kv: -kv[1]):
         slug = SECTOR_SLUG.get(sec)
         if slug and cnt >= MIN_SECTOR_FOR_UNIVERSE:
-            universes[slug] = {"label": sec, "note": f"{sec} names within the US Top 500 ({cnt})."}
+            universes[slug] = {"label": sec, "note": f"{sec} names within the US Top {n_eligible} ({cnt})."}
     for t in eligible:
-        tags = ["us_top500"]
+        tags = [top_id]
         slug = SECTOR_SLUG.get(t["sector"])
         if slug in universes:
             tags.append(slug)

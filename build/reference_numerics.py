@@ -237,11 +237,16 @@ def apply_caps(weights, sectors, max_stock=None, max_sector=None,
                           f"can hold at most {max_stock*n:.0%}. Raise the stock "
                           f"cap to ≥ {1.0/n:.1%} or add names.")
     if max_sector is not None:
-        if max_sector * len(uniq_sectors) < 1 - tol:
-            return w, False, (f"Infeasible: {len(uniq_sectors)} sectors capped at "
-                              f"{max_sector:.0%} can hold at most "
-                              f"{max_sector*len(uniq_sectors):.0%}. Raise the sector "
-                              f"cap or diversify sectors.")
+        # joint capacity: each sector holds at most min(sector_cap, its_names*stock_cap)
+        capacity = 0.0
+        for s in uniq_sectors:
+            cnt = sum(1 for x in sectors if x == s)
+            capacity += (min(max_sector, cnt * max_stock)
+                         if max_stock is not None else max_sector)
+        if capacity < 1 - tol:
+            return w, False, (f"Infeasible: capped sectors hold at most "
+                              f"{capacity:.0%}. Loosen a cap, add names, or "
+                              f"spread across more sectors.")
 
     for _ in range(max_iter):
         changed = False

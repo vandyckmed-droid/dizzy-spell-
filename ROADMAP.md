@@ -1,138 +1,92 @@
 # Roadmap
 
-Running list of features — shipped and candidate. Effort tags: 🟢 small · 🟡 medium · 🔴 large.
-⚙️ = needs a standalone EAS build (won't run in Expo Go / Snack).
-
-Status: ✅ done · 🚧 in progress · ⬜ planned/candidate.
+Personal iPhone tool to **rank, select, and weight** stocks, with a **macro markets** dashboard.
+Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalone EAS build (not Expo Go).
 
 ---
 
 ## ✅ Shipped
 
-### Foundation (v1)
-- ✅ 🟢 iPhone-first app: Screener · Portfolio · Ticker Detail, vertical, no horizontal tables
-- ✅ 🟡 Build-time data layer (FMP *stable* API); key read only at build time, never shipped
-- ✅ 🟡 Sharpe-momentum ranking — user window (default 252→21), sample σ, rf=0, ×252
-- ✅ 🟡 Long-only HRP weighting (stabilized corr → √((1−ρ)/2) → average linkage → quasi-diag → recursive IVP)
-- ✅ 🟡 Per-stock / per-sector caps, redistributed to exactly 100% with infeasibility guidance
-- ✅ 🟢 One-tap selection, persisted locally
-- ✅ 🟢 Ticker detail performance card (5d/10d/1m/3m/6m/1y, green/red)
-- ✅ 🟡 Numerics cross-checked vs NumPy reference (142) + edge/perf suite (1058)
-- ✅ 🟢 Static HTML artifact twin (shares the validated engine)
-- ✅ 🟡 Delivery as an Expo Snack link (auto-updating via public raw, or `--inline` frozen)
+### Data & universe
+- 🟡 **US Top 600** — `fetch_data.py` pulls ~2,100 candidates (≥ $2B) on NYSE/Nasdaq/AMEX and keeps
+  the largest 600 eligible common stocks & ADRs; excludes ETFs/funds/non-common/SPACs/bad data;
+  share classes deduped by issuer CIK (most liquid). 800 trading days of split+dividend-adjusted closes.
+- 🟢 Per-sector sub-universes as tags (horizontal pill selector).
+- 🟡 **Build-time data layer** — the FMP key is read only at build time (`$API_KEY`); it never ships
+  in the artifact, the app, or the Snack. Refreshed on request; pull-to-refresh pulls the latest from
+  the public repo (`main`).
+- 🟡 **Macro intraday layer** (`fetch_intraday.py`) — 5-min bars + daily OHLC for SPY/TLT/XLE/GLD,
+  merged into the snapshot; refreshable on its own.
 
-### Universe (v1.1)
-- ✅ 🟡 **US Top 500** build — ~2,100 candidates → largest 500 eligible; ADRs/foreign allowed;
-  excludes ETFs/funds/non-common/SPACs/bad data; share-class dedup by CIK (most liquid)
-- ✅ 🟢 Per-sector sub-universes as tags + horizontal pill selector
+### Screener & ranking
+- 🟡 **Configurable score** — return window (as-of / start / end), rank by **Return / Volatility /
+  Sharpe**, optional separate volatility window.
+- 🟢 **Default 12–1 window = 250 → 20** (rounded; absorbs EOD lag) with a one-tap **↺ 12–1 reset** chip.
+- 🟡 **Second return window** (default **6–1**) — **Blend** the two into one score, or show them
+  **Separate** side-by-side. Dynamic month labels (e.g. 12–1 / 6–1).
+- 🟡 **Residual momentum** — OLS α, β over the trailing 756 days vs a fixed ETF (VTI); true residuals
+  `e = r − α − β·m` over the chosen window; short-history names marked n/a.
+- 🟡 **Correlation-to-basket cue** — as you scroll, redundant names (high ρ vs a held name) fade and
+  show their nearest twin; diversifiers (low ρ) get a teal dot & add button. Thresholds are
+  **user-configurable** (default: diversify < 0.45, redundant ≥ 0.60) via the cue sheet.
+- 🟢 Sort & filter (market-cap band, exchange); one-tap selection persisted **by date**
+  (survives snapshot rebuilds).
 
-### V2 batch
-- ✅ 🟢 **Interactive price chart** in detail — touch & drag to scrub, ranking window shaded,
-  live price/date/return readout, crosshair, haptic ticks
-- ✅ 🟢 **Pull-to-refresh** (pulls latest snapshot from public raw), **skeleton loader** on launch,
-  **richer haptics & animations** (select-button pop, animated weight bars, tab/list fades)
-- ✅ 🟢 **Sort & filter the screener** — filter by market-cap band and exchange
+### Portfolio & weighting
+- 🟡 Long-only **HRP** (stabilized corr → √((1−ρ)/2) → average linkage → quasi-diagonalization →
+  recursive inverse-variance, latest 252d).
+- 🟡 Per-stock / per-sector **caps** redistributed to exactly 100%, with correct **joint feasibility**
+  (stock + sector caps checked together) and guidance when infeasible.
+- 🟢 Sector allocation bar; **Clear basket**.
 
-### V3 batch — configurable score
-- ✅ 🟡 **Configurable ranking score** (replaced the earlier factor popup, which was reverted):
-  - Set the **return window** (as-of / start / end offsets) — unchanged from before.
-  - Rank by **Return**, **Volatility**, or **Sharpe** (return ÷ σ) — division by σ is optional.
-  - Separate **volatility window** with a *Match return window* toggle (default on).
-  - **Remove market influence** — residualizes both the return and the volatility against a
-    cap-weighted Top-500 market (β removed).
-  - Annualized throughout (mean·252, σ·√252). Default = 12–1 return ÷ 12–1 vol = the original
-    Sharpe momentum (verified identical). All configs validated vs NumPy (631 checks).
-- ❌ Reverted: the fixed 12–1 / 6–1 / residual "factor" popup (superseded by the configurable score)
-- ❌ Declined: composite multi-factor blend, Sortino, trend-vs-200d
+### Ticker detail
+- 🟢 Company logo, sector tag (tappable → that sector's universe).
+- 🟢 Interactive scrub chart with the **ranking window shaded** (dated), performance card
+  (5d/10d/1m/3m/6m/1y), per-name β and annualized α.
+- 🟡 **Top-3 correlated peers** (latest 252d), tappable.
 
-### V5 — Robinhood-inspired visual redesign
-- ✅ 🟡 Near-black surfaces (#000 ground), crisp white type, vivid green (#00C805) / red (#FF5000)
-- ✅ 🟢 Borderless cards & controls (separation via surface lift + hairline dividers), generous spacing, softer/larger radii
-- ✅ 🟢 Screener as clean list rows with dividers; green-tinted selected rows
-- ✅ 🟢 Bold **tabular numerals** throughout; green pills/segments/switches; RH-orange "Clear basket"
-- ✅ 🟢 Dark-friendly categorical sector palette (distinct from semantic green/red)
-- (HTML artifact twin keeps the prior theme for now — app-only redesign)
+### Markets (macro dashboard)
+- 🟡 **Markets tab** — 2×2 tiles (last · day change · session sparkline) for SPY / TLT / XLE / GLD.
+- 🟡 **Rich chart** — timeframe **1D (5-min) · 6M · 1Y**, chart type **Line / OHLC bars**, crosshair
+  scrub, prev-close reference on 1D.
+- 🟢 **Configurable EMAs** — EMA-50 / EMA-200 on the daily views (on/off + adjustable period).
+- 🟢 **Golden / death cross effect** — regime ribbon (green fast>slow, red fast<slow) + diamond
+  markers at each crossover; toggleable.
 
-### V4 — research-standard residual momentum (external review)
-- ✅ 🟡 **Fixed ETF market proxy (VTI)** — replaces the cap-weighted-current-constituents proxy;
-  no membership/weight bias, no self-inclusion. Stored in the snapshot as a daily-return series.
-- ✅ 🟡 **756-day (36-month) OLS β + intercept**, estimated separately from the momentum signal
-  window (was: β from the same short window — the review's main finding).
-- ✅ 🟢 True regression residuals **e = r − α − β·m** over the user's selected return/vol windows.
-- ✅ 🟢 **Cumulative residual** computed from the residual series (fixes the bug where a raw
-  cumulative return was shown with an α label).
-- ✅ 🟢 Short-history names **marked n/a** in residual mode (count shown), not silently computed;
-  history extended 520→800 trading days (~1.8→2.7 MB) so the 756-day window fits.
-- ✅ 🟢 Detail shows **β and annualized α (vs VTI, 756d OLS)** per name.
-- All 7 scoring configs cross-checked against the NumPy reference (**991 checks**).
-
-### V6 — Markets tab (macro intraday) + window defaults
-- ✅ 🟡 **Markets tab** (chrome now Screener · Portfolio · Markets) — a macro dashboard for
-  **SPY / TLT / XLE / GLD**: 2×2 tiles (last · day change · live sparkline), tap to select.
-- ✅ 🟡 **Rich price chart** — timeframe **1D (5-min intraday) · 6M · 1Y (daily)**, chart type
-  **Line / OHLC bars**, crosshair scrub with haptics, prev-close reference on 1D.
-- ✅ 🟢 **Configurable EMAs** — EMA-50 (blue) + EMA-200 (amber) overlays on the daily views,
-  each with an on/off toggle and an adjustable period (2–400); warmed with off-screen history.
-- ✅ 🟡 **Intraday pipeline** (`build/fetch_intraday.py`) — 5-min bars (~10 sessions) + daily OHLC
-  (`historical-price-eod/full`) for the macro set, merged into the snapshot; refreshable on its
-  own without rebuilding the 500-name EOD layer.
-- ✅ 🟢 **Default 12–1 window rounded to 250 → 20** (was 252 → 21) — cleaner, absorbs occasional
-  EOD-data lag; one-tap **↺ 12–1 reset** chip on the return-window card.
-- ✅ 🟢 EOD snapshot refreshed through the latest close; numerics re-validated (991 + 1193 checks).
-- Note: intraday is a **build-time** layer (the delivered Snack is key-free and makes no live
-  calls) — refreshed when the pipeline is re-run. Intraday for all 500 names isn't baked (size).
-
-### Basket-aware screening
-- ✅ 🟡 **Correlation-to-basket cue** in the ranked list — as you walk down, each unselected
-  name is scored by its **max daily-return correlation vs the names you've already selected**
-  (latest 252d). Redundant names (ρ ≥ 0.60) **fade** (deeper as ρ→0.9) and show their nearest
-  held twin (`≈ MU`); diversifiers (ρ < 0.35) stay crisp with a **teal dot**, a *diversifies*
-  tag, and a teal-tinted **+** button. Neutral names are untouched. No cue until the basket is
-  non-empty; recomputed only when the basket or window changes.
-
-### Fixes
-- ✅ 🟢 **As-of persistence bug** — the as-of was persisted as a numeric index, so a snapshot
-  rebuild that shifted the calendar (520→800 trading days) silently pointed it at an old day,
-  which broke residual momentum (all names n/a). Now persisted as a **date string** and resolved
-  by date each load, falling back to the latest date when the saved date isn't in the new calendar
-  (auto-recovers a stuck state).
-
-### V3.1 polish
-- ✅ 🟢 Count line shows selections **within the current ranked list** ("N selected here")
-- ✅ 🟢 **Clear basket** button (with confirm) on the Portfolio view
-- ✅ 🟢 Ticker detail rebalanced — taller price chart, more compact performance card
-- ✅ 🟡 **Most-correlated peers** on the ticker detail — top 3 by daily-return correlation
-  (latest 252d), tappable to navigate (e.g. NVDA → TSM/AVGO/VRT, JPM → BAC/WFC/C)
-- ✅ 🟢 Performance card inset to match the other detail cards
-- ✅ 🟢 **Company logo** in the ticker-detail header (FMP public image CDN; initials fallback)
-- ✅ 🟢 **Tappable sector tag** — jumps to that sector's universe on the Screener
-- ⬜ 🟡 Tappable **industry** tag → industry-filtered list (needs a new industry filter)
-- ⬜ 🟢 Logos in the rank list rows (lazy-loaded) — optional follow-up
-- ⬜ 🟡 Ticker-detail tabs — split into sub-tabs as more per-name info is added (deferred until the view grows)
+### Design & reliability
+- 🟡 Robinhood-inspired dark theme (near-black, vivid green/red, tabular numerals, soft geometry).
+- 🟢 Static HTML artifact twin shares the validated engine.
+- 🟡 Numerics cross-checked vs a NumPy reference — `validate_js.mjs` (991) + `verify_edge.mjs` (1147).
+- 🟢 Headless react-native-web render harness (Screener / Portfolio / Markets / detail, zero errors).
 
 ---
 
-## ⬜ Candidate — deeper ranking (the "rank" half)
-- ⬜ 🟢 Risk-free rate input (true Sharpe numerator)
-- ⬜ 🟡 Sector-relative ranking (rank within sector)
-- ⬜ 🟡 Weighted second score component — another window, or value / quality measures — blended in
+## ⬜ Candidate — next
 
-## ⬜ Candidate — smarter weighting & risk (the "weight" half)
-- ⬜ 🟡 Compare weighting schemes (HRP vs equal / inverse-vol / min-variance)
-- ⬜ 🟡 Portfolio backtest line — weighted-basket cumulative return, vol, max drawdown over the window
-- ⬜ 🟡 Correlation heatmap + diversification stats (effective number of bets)
-- ⬜ 🟢 More constraints — max holdings (cardinality), min weight, per-sector minimums
+### Ranking
+- 🟢 Risk-free rate input (true Sharpe numerator)
+- 🟡 Sector-relative ranking (rank within sector)
+- 🟡 Weighted blend (adjustable A/B weight instead of 50/50); value / quality as a third input
 
-## ⬜ Candidate — workflow & persistence
-- ⬜ 🟡 Named portfolios + separate watchlist
-- ⬜ 🟢 Export weights (CSV / shareable card)
-- ⬜ 🟡 Per-ticker notes
+### Weighting & risk
+- 🟡 Compare weighting schemes (HRP vs equal / inverse-vol / min-variance)
+- 🟡 Portfolio backtest line (weighted-basket cumulative return, vol, max drawdown)
+- 🟡 Correlation heatmap + diversification stats (effective number of bets)
+- 🟢 More constraints (max holdings, min weight, per-sector minimums)
 
-## ⬜ Candidate — data & freshness
-- ⬜ 🟡 Scheduled auto-refresh — GitHub Action rebuilds the snapshot on a cron (FMP key as repo secret)
-- ⬜ 🟡 Fundamentals (P/E, margins, growth) as filters/columns
-- ⬜ 🟡 Custom / larger universes (type your own list; add S&P 500)
+### Macro
+- 🟡 More symbols (DXY/UUP dollar, HYG credit, USO oil, BTC)
+- 🟢 Multi-range / benchmark compare on the chart
 
-## ⬜ Candidate — native polish
-- ⬜ 🟢 Deeper chart interactions (multi-range toggles, compare a benchmark)
-- ⬜ 🔴 ⚙️ Standalone EAS build — home-screen icon, widgets (top movers), push notifications (rebalance alerts)
+### Workflow & data
+- 🟡 Named portfolios + watchlist; export weights (CSV / card)
+- 🟡 Scheduled auto-refresh (GitHub Action on a cron, FMP key as a repo secret)
+- 🟡 Fundamentals (P/E, margins, growth) as filters/columns; custom / larger universes
+- 🔴 ⚙️ Standalone EAS build — home-screen icon, widgets, push (rebalance alerts)
+
+---
+
+## Notes
+- Intraday is a **build-time** layer (the app is key-free) — refreshed by re-running
+  `fetch_data.py` + `fetch_intraday.py`. Intraday isn't baked for all 600 (size).
+- The HTML artifact twin keeps the pre-Robinhood theme; the app is the primary surface.

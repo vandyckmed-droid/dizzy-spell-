@@ -543,8 +543,21 @@ function applyCaps(weights, sectors, maxStock, maxSector){
   const secs=[...new Set(sectors)];
   if (maxStock>0 && maxStock*n < 1-tol)
     return {w, feasible:false, msg:`Infeasible: ${n} names capped at ${pct(maxStock)} hold at most ${pct(maxStock*n)}. Raise the stock cap to ≥ ${pct(1/n,1)} or add names.`};
-  if (maxSector>0 && maxSector*secs.length < 1-tol)
-    return {w, feasible:false, msg:`Infeasible: ${secs.length} sector${secs.length>1?'s':''} capped at ${pct(maxSector)} hold at most ${pct(maxSector*secs.length)}. Raise the sector cap or diversify sectors.`};
+  if (maxSector>0){
+    // joint capacity: each sector can hold at most min(sectorCap, itsNames*stockCap).
+    // If the sectors together can't reach 100%, the two caps are jointly infeasible
+    // (a per-cap check alone misses this — e.g. 0.15 stock + 0.30 sector on a
+    // concentrated basket tops out below 1).
+    let capacity=0;
+    for (const s of secs){
+      let cnt=0; for (const x of sectors) if (x===s) cnt++;
+      capacity += maxStock>0 ? Math.min(maxSector, cnt*maxStock) : maxSector;
+    }
+    if (capacity < 1-tol)
+      return {w, feasible:false, msg: maxStock>0
+        ? `Infeasible: a ${pct(maxStock)} stock cap with a ${pct(maxSector)} sector cap lets these ${secs.length} sector${secs.length>1?'s':''} hold at most ${pct(capacity)}. Loosen a cap, add names, or spread across more sectors.`
+        : `Infeasible: ${secs.length} sector${secs.length>1?'s':''} capped at ${pct(maxSector)} hold at most ${pct(capacity)}. Raise the sector cap or diversify sectors.`};
+  }
   for (let iter=0; iter<1000; iter++){
     let changed=false;
     if (maxStock>0){
