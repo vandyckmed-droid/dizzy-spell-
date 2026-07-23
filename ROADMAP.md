@@ -47,6 +47,10 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 - 🟡 Per-stock / per-sector **caps** + a per-stock **minimum weight** (0.5% steps, default off),
   redistributed to exactly 100% with correct **joint feasibility** (caps + floor solved together)
   and guidance when infeasible.
+- 🟡 **Weighting compare** — HRP next to **equal-weight, inverse-vol, and long-only min-variance**
+  for the same book, each shown with annualized vol, effective bets and top weight (post-caps). Tap
+  to weight the book by any scheme. All four cross-checked against the NumPy reference (shared
+  Gauss-Jordan inverse; long-only min-var by iterative negative-name pruning).
 - 🟢 Sector allocation bar; **Clear basket** (moved to the bottom).
 - 🟡 **Selection guidance** — a Guidance card with **effective bets** (`1/wʹRw`, correlation-adjusted
   count of independent positions), a **suggested add** (top-ranked name that diversifies the basket),
@@ -85,17 +89,17 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 
 ## ⬜ Candidate — next
 
-### 🎯 Next up — compare weighting schemes
-Show HRP next to **equal-weight, inverse-vol, and long-only min-variance** for the same book, so you
-can see what HRP buys you (concentration, effective bets, portfolio vol). Needs 3 new engine functions
-+ a shared matrix inverse, each cross-checked against the NumPy reference before it ships.
+### 🎯 Next up — portfolio backtest line
+Plot the current book's cumulative return, vol and max drawdown over the trailing 1–2y (vs SPY),
+periodically rebalanced to the chosen weighting scheme. Closes the loop: shows whether the
+momentum + weighting pipeline would actually have paid off. Needs care on rebalancing + no lookahead;
+be explicit that it's in-sample.
 
 ### Ranking
 - 🟡 Sector-relative ranking (rank within sector)
 - 🟡 Adjustable A/B blend weight (instead of 50/50); value / quality as a third input
 
 ### Weighting & risk
-- 🟡 Portfolio backtest line (weighted-basket cumulative return, vol, max drawdown)
 - 🟡 Correlation heatmap (effective bets already shipped on the Portfolio)
 - 🟢 Swipe-to-hide rows on the Screener (with a reset) — deferred; checkmark select shipped
 - 🟢 More constraints (max holdings / cardinality, per-sector minimums)

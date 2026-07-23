@@ -75,6 +75,13 @@ const MODES = [
   { key: 'return', label: 'Return', short: 'Return' },
   { key: 'vol', label: 'Volatility', short: 'Vol' },
 ];
+// portfolio weighting schemes for the compare card
+const SCHEMES = [
+  { key: 'hrp', label: 'HRP', blurb: 'Hierarchical risk parity' },
+  { key: 'minvar', label: 'Min-var', blurb: 'Long-only minimum variance' },
+  { key: 'invvol', label: 'Inverse-vol', blurb: 'Weight ∝ 1/σ' },
+  { key: 'equal', label: 'Equal', blurb: 'Equal weight (1/N)' },
+];
 function cfgOf(st, betaWindow) {
   return {
     retStart: st.start, retEnd: st.end,
@@ -300,6 +307,7 @@ function normalizeState(saved) {
     maxStock: saved.maxStock ?? 0,
     maxSector: saved.maxSector ?? 0,
     minStock: saved.minStock ?? 0,
+    weightScheme: ['hrp', 'equal', 'invvol', 'minvar'].includes(saved.weightScheme) ? saved.weightScheme : 'hrp',
     mode: ['sharpe', 'return', 'vol'].includes(saved.mode) ? saved.mode : 'sharpe',
     removeMkt: !!saved.removeMkt,
     matchVol: saved.matchVol == null ? true : !!saved.matchVol,
@@ -988,12 +996,52 @@ function WatchlistBody({ C, snap, BYSYM, market, st, persist, onOpen }) {
   );
 }
 
+// compare HRP vs equal / inverse-vol / min-variance for the same basket, pick the
+// active one. Each row shows the scheme's annualized vol, effective bets, and top
+// weight — all on the post-caps weights, so it's what you'd actually hold.
+function WeightingCard({ C, compare, active, onPick }) {
+  const bestVol = Math.min(...compare.map(c => c.vol));
+  const bestBets = Math.max(...compare.map(c => c.effBets));
+  return (
+    <Card C={C}>
+      <Eyebrow C={C}>Weighting</Eyebrow>
+      <View style={{ flexDirection: 'row', paddingHorizontal: 4, marginTop: 2, marginBottom: 2 }}>
+        <Text style={{ flex: 1, color: C.faint, fontSize: 10.5, fontWeight: '700' }}>SCHEME</Text>
+        <Text style={{ width: 70, textAlign: 'right', color: C.faint, fontSize: 10.5, fontWeight: '700' }}>ANN VOL</Text>
+        <Text style={{ width: 62, textAlign: 'right', color: C.faint, fontSize: 10.5, fontWeight: '700' }}>EFF BETS</Text>
+        <Text style={{ width: 52, textAlign: 'right', color: C.faint, fontSize: 10.5, fontWeight: '700' }}>TOP W</Text>
+      </View>
+      {compare.map(c => {
+        const on = c.key === active;
+        return (
+          <Pressable key={c.key} onPress={() => onPick(c.key)} accessibilityRole="button"
+            accessibilityState={{ selected: on }} accessibilityLabel={`Weight by ${c.label}`}
+            style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 8, borderRadius: 10, marginTop: 4, backgroundColor: on ? C.accentSoft : C.surface2, borderWidth: 1, borderColor: on ? C.accent : C.line }}>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 7, minWidth: 0 }}>
+              <View style={{ width: 15, height: 15, borderRadius: 8, borderWidth: 2, borderColor: on ? C.accent : C.faint, alignItems: 'center', justifyContent: 'center' }}>
+                {on ? <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: C.accent }} /> : null}
+              </View>
+              <Text numberOfLines={1} style={{ color: on ? C.text : C.muted, fontSize: 13.5, fontWeight: '700' }}>{c.label}</Text>
+            </View>
+            <Text style={[TNUM, { width: 70, textAlign: 'right', fontSize: 13, fontWeight: '700', color: c.vol <= bestVol + 1e-9 ? C.gain : C.text }]}>{E.pct(c.vol, 1)}</Text>
+            <Text style={[TNUM, { width: 62, textAlign: 'right', fontSize: 13, fontWeight: '700', color: c.effBets >= bestBets - 1e-9 ? C.gain : C.text }]}>{c.effBets.toFixed(2)}</Text>
+            <Text style={[TNUM, { width: 52, textAlign: 'right', fontSize: 13, color: C.muted }]}>{E.pct(c.maxW, 0)}</Text>
+          </Pressable>
+        );
+      })}
+      <Text style={{ color: C.faint, fontSize: 11, lineHeight: 15, marginTop: 8 }}>
+        Lower vol and more effective bets (green) are better; top weight shows concentration. All figures use the latest 252d, after your caps and floor. Tap to weight the book by that scheme.
+      </Text>
+    </Card>
+  );
+}
+
 function Portfolio({ C, snap, market, st, persist, onOpen, refreshing, onRefresh }) {
   const [infoOpen, setInfoOpen] = useState(false);
   const [booksOpen, setBooksOpen] = useState(false);
   const activeKind = activeBookOf(st).kind;
   const BYSYM = useMemo(() => Object.fromEntries(snap.tickers.map(t => [t.symbol, t])), [snap]);
-  const pf = useMemo(() => computePortfolio(snap, BYSYM, st), [snap, st.selected, st.asof, st.maxStock, st.maxSector, st.minStock]);
+  const pf = useMemo(() => computePortfolio(snap, BYSYM, st), [snap, st.selected, st.asof, st.maxStock, st.maxSector, st.minStock, st.weightScheme]);
   const guide = useMemo(() => portfolioGuidance(snap, BYSYM, st, market, pf),
     [snap, market, pf, st.asof, st.universe, st.mode, st.removeMkt, st.start, st.end, st.sortDir, st.matchVol, st.volStart, st.volEnd]);
   const colorFor = useMemo(() => makeColorFor(), [snap]);
@@ -1039,7 +1087,7 @@ function Portfolio({ C, snap, market, st, persist, onOpen, refreshing, onRefresh
       </View>
       <Card C={C}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Eyebrow C={C}>HRP constraints</Eyebrow>
+          <Eyebrow C={C}>Constraints</Eyebrow>
           <InfoDot C={C} onPress={() => setInfoOpen(true)} />
         </View>
         <Stepper C={C} label="Max stock weight" sub="per-name cap"
@@ -1057,6 +1105,8 @@ function Portfolio({ C, snap, market, st, persist, onOpen, refreshing, onRefresh
         <Empty C={C} />
       ) : (
         <>
+          {pf.compare ? <WeightingCard C={C} compare={pf.compare} active={pf.scheme}
+            onPick={(k) => { if (k !== st.weightScheme) { animateNext(); haptic('select'); persist({ ...st, weightScheme: k }); } }} /> : null}
           {!pf.feasible ? (
             <View style={[styles.warn, { backgroundColor: C.lossSoft, borderColor: C.loss }]}>
               <Text style={{ color: C.loss, fontWeight: '600', fontSize: 13, lineHeight: 18 }}>⚠︎ {pf.msg}</Text>
@@ -1142,9 +1192,11 @@ function PortfolioInfoSheet({ C, visible, onClose, snap }) {
     <Sheet C={C} visible={visible} onClose={onClose}>
       <Text style={[styles.sheetTitle, { color: C.text }]}>How the portfolio works</Text>
       <Text style={{ color: C.muted, fontSize: 13, lineHeight: 19, marginBottom: 12 }}>
-        Weights come from long-only <Text style={{ color: C.text, fontWeight: '700' }}>Hierarchical Risk Parity</Text> on
-        the latest 252 trading days (as-of), independent of the ranking skip window. Weights are redistributed to honor the
-        per-name caps, the sector cap and the minimum-weight floor, and total exactly 100%.
+        Weights come from your chosen scheme in the <Text style={{ color: C.text, fontWeight: '700' }}>Weighting</Text> card —
+        long-only <Text style={{ color: C.text, fontWeight: '700' }}>Hierarchical Risk Parity</Text> by default, or equal /
+        inverse-vol / long-only minimum-variance — on the latest 252 trading days (as-of), independent of the ranking skip
+        window. Weights are redistributed to honor the per-name caps, the sector cap and the minimum-weight floor, and total
+        exactly 100%.
       </Text>
       <Text style={{ color: C.text, fontSize: 13, fontWeight: '700', marginBottom: 4 }}>Effective bets</Text>
       <Text style={{ color: C.muted, fontSize: 13, lineHeight: 19, marginBottom: 12 }}>
@@ -1245,10 +1297,26 @@ function computePortfolio(snap, BYSYM, st) {
   for (let t = 1; t < minLen; t++) {
     R.push(syms.map((_, j) => { const c = cols[j]; const off = c.length - minLen; return c[off + t] / c[off + t - 1] - 1; }));
   }
-  const w = E.hrpWeights(R);
   const sectors = syms.map(s => BYSYM[s].sector);
-  const capped = E.applyCaps(w, sectors, st.maxStock, st.maxSector, st.minStock);
-  return { syms, weights: capped.w, feasible: capped.feasible, msg: capped.msg, sectors };
+  // all four weighting schemes on the same basket, each run through the caps/floor.
+  // Stats (annualized vol, effective bets, top weight) are computed on the capped
+  // weights so the compare reflects what you'd actually hold.
+  const cov = E.covMatrix(R), corr = E.corrFromCov(cov);
+  const rawOf = { hrp: E.hrpWeights(R), equal: E.equalWeights(R), invvol: E.inverseVolWeights(R), minvar: E.minVarWeights(R) };
+  const stats = (wv) => {
+    let varD = 0, q = 0;
+    for (let i = 0; i < wv.length; i++) for (let j = 0; j < wv.length; j++) {
+      varD += wv[i] * wv[j] * cov[i][j];
+      q += wv[i] * wv[j] * (i === j ? 1 : corr[i][j]);
+    }
+    return { vol: Math.sqrt(Math.max(0, varD) * TD), effBets: q > 0 ? 1 / q : wv.length, maxW: Math.max(...wv) };
+  };
+  const compare = SCHEMES.map(sc => {
+    const cap = E.applyCaps(rawOf[sc.key], sectors, st.maxStock, st.maxSector, st.minStock);
+    return { key: sc.key, label: sc.label, weights: cap.w, feasible: cap.feasible, msg: cap.msg, ...stats(cap.w) };
+  });
+  const active = compare.find(c => c.key === st.weightScheme) || compare[0];
+  return { syms, weights: active.weights, feasible: active.feasible, msg: active.msg, sectors, compare, scheme: active.key };
 }
 
 // Selection guidance from data we already compute: a correlation-adjusted

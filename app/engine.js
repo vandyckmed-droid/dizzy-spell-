@@ -193,6 +193,60 @@ function hrpWeights(R){
   return recursiveBisection(cov, order);
 }
 
+function equalWeights(R){                     // 1/N
+  const n = R[0].length;
+  return new Array(n).fill(1/n);
+}
+
+function inverseVolWeights(R){                // w_i ∝ 1/σ_i, normalized
+  const cov = covMatrix(R), n = cov.length, iv = new Array(n);
+  let s = 0;
+  for (let i=0;i<n;i++){ const sd = Math.sqrt(cov[i][i]>0?cov[i][i]:0); iv[i] = sd>0 ? 1/sd : 0; s += iv[i]; }
+  return s>0 ? iv.map(x=>x/s) : new Array(n).fill(1/n);
+}
+
+function matInverse(A){
+  const n = A.length;
+  const M = A.map((row,i)=> row.concat(Array.from({length:n},(_,j)=> i===j?1:0)));
+  for (let col=0; col<n; col++){
+    let piv=col, best=Math.abs(M[col][col]);
+    for (let r=col+1;r<n;r++){ const v=Math.abs(M[r][col]); if (v>best){ best=v; piv=r; } }
+    if (best < 1e-14) return null;
+    if (piv!==col){ const t=M[piv]; M[piv]=M[col]; M[col]=t; }
+    const pv=M[col][col];
+    for (let j=0;j<2*n;j++) M[col][j]/=pv;
+    for (let r=0;r<n;r++){ if (r===col) continue; const f=M[r][col]; if (f!==0){ for (let j=0;j<2*n;j++) M[r][j]-=f*M[col][j]; } }
+  }
+  return M.map(row=>row.slice(n));
+}
+
+function minVarWeights(R){
+  const cov = covMatrix(R), n = cov.length, EPS = 1e-9;
+  let active = Array.from({length:n},(_,i)=>i), w = new Array(n).fill(0);
+  for (let iter=0; iter<n; iter++){
+    const m = active.length;
+    if (m === 1){ w = new Array(n).fill(0); w[active[0]] = 1; return w; }
+    const sub = active.map(i=> active.map(j=> cov[i][j]));
+    const inv = matInverse(sub);
+    if (!inv){
+      let s=0; const iv=active.map(i=>{ const sd=Math.sqrt(cov[i][i]>0?cov[i][i]:0); const v=sd>0?1/sd:0; s+=v; return v; });
+      w = new Array(n).fill(0); active.forEach((i,k)=> w[i]= s>0 ? iv[k]/s : 1/m); return w;
+    }
+    const raw = new Array(m).fill(0); let tot=0;
+    for (let i=0;i<m;i++){ let s=0; for (let j=0;j<m;j++) s+=inv[i][j]; raw[i]=s; tot+=s; }
+    if (Math.abs(tot) < 1e-18){ w=new Array(n).fill(0); active.forEach(i=> w[i]=1/m); return w; }
+    const ws = raw.map(x=> x/tot);
+    let minv=-EPS, mink=-1;
+    for (let k=0;k<m;k++){ if (ws[k] < minv){ minv=ws[k]; mink=k; } }
+    if (mink < 0){                                       // all ≥ -EPS → done
+      let s=0; const cl=ws.map(x=> x>0?x:0); for (const x of cl) s+=x;
+      w = new Array(n).fill(0); active.forEach((i,k)=> w[i]= s>0 ? cl[k]/s : 1/m); return w;
+    }
+    active = active.filter((_,k)=> k!==mink);
+  }
+  return w;
+}
+
 function applyCaps(weights, sectors, maxStock, maxSector, minStock){
   const tol=1e-9, n=weights.length;
   minStock = minStock>0 ? minStock : 0;
@@ -295,4 +349,4 @@ function fmtCap(x){ if(x>=1e12) return '$'+(x/1e12).toFixed(2)+'T'; if(x>=1e9) r
 
 function clsOf(x){ return x>=0?'gain':'loss'; }
 
-export { simpleReturns, mean, sampleStd, sharpeMomentum, momentumDaily, annualizeStats, olsFit, momentumScore, covMatrix, corrFromCov, quasiDiagOrder, clusterVar, recursiveBisection, hrpWeights, applyCaps, periodReturn, pct, signPct, fmtSharpe, fmtCap, clsOf, TD };
+export { simpleReturns, mean, sampleStd, sharpeMomentum, momentumDaily, annualizeStats, olsFit, momentumScore, covMatrix, corrFromCov, quasiDiagOrder, clusterVar, recursiveBisection, hrpWeights, equalWeights, inverseVolWeights, matInverse, minVarWeights, applyCaps, periodReturn, pct, signPct, fmtSharpe, fmtCap, clsOf, TD };
