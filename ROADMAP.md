@@ -45,6 +45,14 @@ Status: ✅ done · 🚧 in progress · ⬜ planned/candidate.
 - ❌ Reverted: the fixed 12–1 / 6–1 / residual "factor" popup (superseded by the configurable score)
 - ❌ Declined: composite multi-factor blend, Sortino, trend-vs-200d
 
+### V5 — Robinhood-inspired visual redesign
+- ✅ 🟡 Near-black surfaces (#000 ground), crisp white type, vivid green (#00C805) / red (#FF5000)
+- ✅ 🟢 Borderless cards & controls (separation via surface lift + hairline dividers), generous spacing, softer/larger radii
+- ✅ 🟢 Screener as clean list rows with dividers; green-tinted selected rows
+- ✅ 🟢 Bold **tabular numerals** throughout; green pills/segments/switches; RH-orange "Clear basket"
+- ✅ 🟢 Dark-friendly categorical sector palette (distinct from semantic green/red)
+- (HTML artifact twin keeps the prior theme for now — app-only redesign)
+
 ### V4 — research-standard residual momentum (external review)
 - ✅ 🟡 **Fixed ETF market proxy (VTI)** — replaces the cap-weighted-current-constituents proxy;
   no membership/weight bias, no self-inclusion. Stored in the snapshot as a daily-return series.

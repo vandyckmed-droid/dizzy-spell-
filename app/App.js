@@ -29,27 +29,28 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 const animateNext = () => LayoutAnimation.configureNext(LayoutAnimation.create(
   220, LayoutAnimation.Types.easeInEaseOut, LayoutAnimation.Properties.opacity));
 
-/* ---- palette (light / dark) ---- */
+/* ---- palette (Robinhood-inspired: near-black, white type, vivid green/red) ---- */
 const palettes = {
   dark: {
-    ground: '#0b1220', surface: '#151e2e', surface2: '#1c2740', raised: '#22304d',
-    line: 'rgba(255,255,255,0.09)', lineStrong: 'rgba(255,255,255,0.16)',
-    text: '#eaeef5', muted: '#93a0b8', faint: '#65728c',
-    accent: '#e8b24a', accentInk: '#231a06', accentSoft: 'rgba(232,178,74,0.16)',
-    gain: '#2fb574', loss: '#f0524a',
-    gainSoft: 'rgba(47,181,116,0.16)', lossSoft: 'rgba(240,82,74,0.16)',
+    ground: '#000000', surface: '#0F1113', surface2: '#191C1F', raised: '#23272B',
+    line: 'rgba(255,255,255,0.06)', lineStrong: 'rgba(255,255,255,0.12)',
+    text: '#FFFFFF', muted: '#A2A9B0', faint: '#6B7178',
+    accent: '#00C805', accentInk: '#00140A', accentSoft: 'rgba(0,200,5,0.14)',
+    gain: '#00C805', loss: '#FF5000',
+    gainSoft: 'rgba(0,200,5,0.14)', lossSoft: 'rgba(255,80,0,0.14)',
   },
   light: {
-    ground: '#f4f6f9', surface: '#ffffff', surface2: '#eef2f7', raised: '#e5ebf3',
-    line: 'rgba(16,26,48,0.10)', lineStrong: 'rgba(16,26,48,0.18)',
-    text: '#101a2c', muted: '#5a6a86', faint: '#8b97ad',
-    accent: '#b7791f', accentInk: '#fff6e2', accentSoft: 'rgba(183,121,31,0.14)',
-    gain: '#1f9d63', loss: '#d63a34',
-    gainSoft: 'rgba(31,157,99,0.14)', lossSoft: 'rgba(214,58,52,0.14)',
+    ground: '#FFFFFF', surface: '#FFFFFF', surface2: '#F2F4F6', raised: '#E9ECEF',
+    line: 'rgba(0,0,0,0.07)', lineStrong: 'rgba(0,0,0,0.14)',
+    text: '#0A0B0D', muted: '#5B6169', faint: '#8B9199',
+    accent: '#00A804', accentInk: '#FFFFFF', accentSoft: 'rgba(0,168,4,0.12)',
+    gain: '#00A804', loss: '#E63A00',
+    gainSoft: 'rgba(0,168,4,0.12)', lossSoft: 'rgba(230,58,0,0.12)',
   },
 };
 
-const SECTOR_COLORS = ['#e8b24a','#2fb574','#5b9df0','#c86bd6','#f0894a','#54c7c7','#e0607e','#9aa7bd','#8bd450','#d64a4a','#6a7bd6'];
+// categorical palette tuned for the near-black theme (distinct from the semantic green/red)
+const SECTOR_COLORS = ['#5AC8FA','#BF5AF2','#FF9F0A','#5E5CE6','#64D2FF','#FF6482','#FFD60A','#40C8B0','#C7A06A','#FF8A5B','#9CA3AF'];
 const PERIODS = [['5-day',5],['10-day',10],['1-month',21],['3-month',63],['6-month',126],['1-year',252]];
 
 // Ranking modes. The score is: return (annualized), volatility (annualized), or
@@ -407,9 +408,9 @@ function RankCard({ C, o, mode, removeMkt, selected, onOpen, onToggle }) {
     onToggle();
   };
   return (
-    <View style={[styles.card, { backgroundColor: C.surface, borderColor: selected ? C.accent : C.line }]}>
+    <View style={[styles.card, { backgroundColor: selected ? C.accentSoft : 'transparent', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line }]}>
       <Pressable style={styles.cardTap} onPress={onOpen} hitSlop={4}>
-        <Text style={[styles.rank, { color: selected ? C.accent : C.muted }]}>{rank}</Text>
+        <Text style={[styles.rank, { color: selected ? C.accent : C.faint }]}>{rank}</Text>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[styles.tick, { color: C.text }]}>{t.symbol}</Text>
           <Text numberOfLines={1} style={[styles.cname, { color: C.muted }]}>{t.name}</Text>
@@ -422,7 +423,7 @@ function RankCard({ C, o, mode, removeMkt, selected, onOpen, onToggle }) {
       </Pressable>
       <Pressable onPress={onSel} hitSlop={8} accessibilityRole="button"
         accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${t.symbol}`}>
-        <Animated.View style={[styles.selBtn, { transform: [{ scale }], backgroundColor: selected ? C.accent : C.surface2, borderColor: selected ? C.accent : C.lineStrong }]}>
+        <Animated.View style={[styles.selBtn, { transform: [{ scale }], backgroundColor: selected ? C.accent : C.surface2 }]}>
           <Text style={{ fontSize: 22, fontWeight: '600', color: selected ? C.accentInk : C.muted, marginTop: -2 }}>
             {selected ? '✓' : '+'}
           </Text>
@@ -782,7 +783,7 @@ function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen, onSector 
             return (
               <View key={lab} style={[styles.perfRow, { borderTopColor: C.line, borderTopWidth: i ? 1 : 0 }]}>
                 <Text style={{ color: C.muted, fontSize: 16, fontWeight: '600' }}>{lab}</Text>
-                <Text style={{ color: r == null ? C.faint : (r >= 0 ? C.gain : C.loss), fontSize: 23, fontWeight: '800', letterSpacing: -0.5 }}>
+                <Text style={[TNUM, { color: r == null ? C.faint : (r >= 0 ? C.gain : C.loss), fontSize: 23, fontWeight: '800', letterSpacing: -0.5 }]}>
                   {r == null ? '—' : E.signPct(r, 2)}
                 </Text>
               </View>
@@ -869,18 +870,18 @@ function ScrubChart({ C, snap, ticker, st }) {
   }
 
   return (
-    <View style={[styles.cardPanel, { backgroundColor: C.surface, borderColor: C.line, padding: 14 }]}>
+    <View style={[styles.cardPanel, { backgroundColor: C.surface, padding: 16 }]}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 6 }}>
         <View>
           <Text style={{ color: C.faint, fontSize: 10.5, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' }}>
             {idx == null ? 'Adjusted close · as-of' : dates[active]}
           </Text>
-          <Text style={{ color: C.text, fontSize: 22, fontWeight: '800', letterSpacing: -0.4 }}>
+          <Text style={[TNUM, { color: C.text, fontSize: 24, fontWeight: '800', letterSpacing: -0.5 }]}>
             ${price != null ? price.toFixed(2) : '—'}
           </Text>
         </View>
         <View style={{ alignItems: 'flex-end' }}>
-          <Text style={{ color: chg >= 0 ? C.gain : C.loss, fontSize: 17, fontWeight: '800' }}>{E.signPct(chg, 1)}</Text>
+          <Text style={[TNUM, { color: chg >= 0 ? C.gain : C.loss, fontSize: 17, fontWeight: '800' }]}>{E.signPct(chg, 1)}</Text>
           <Text style={{ color: C.faint, fontSize: 10.5 }}>vs window open</Text>
         </View>
       </View>
@@ -929,28 +930,28 @@ function ScrubChart({ C, snap, ticker, st }) {
 function AppHeader({ C, snap }) {
   const when = (snap.generatedAt || '').replace('T', ' ').replace('Z', ' UTC');
   return (
-    <View style={{ paddingTop: 8, paddingBottom: 10 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+    <View style={{ paddingTop: 10, paddingBottom: 12 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
         <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: C.gain }} />
-        <Text style={{ color: C.text, fontSize: 24, fontWeight: '800', letterSpacing: -0.4 }}>Momentum Screener</Text>
+        <Text style={{ color: C.text, fontSize: 26, fontWeight: '800', letterSpacing: -0.6 }}>Momentum</Text>
       </View>
-      <Text style={{ color: C.muted, fontSize: 11.5, marginTop: 3 }}>
-        FMP adj. close · {snap.counts?.eligible ?? snap.tickers.length} names · as of {when}
+      <Text style={{ color: C.faint, fontSize: 12, marginTop: 4 }}>
+        {snap.counts?.eligible ?? snap.tickers.length} names · adj. close · as of {when}
       </Text>
     </View>
   );
 }
 function Card({ C, children, pad = true }) {
-  return <View style={[styles.cardPanel, { backgroundColor: C.surface, borderColor: C.line, padding: pad ? 14 : 4, paddingHorizontal: 14 }]}>{children}</View>;
+  return <View style={[styles.cardPanel, { backgroundColor: C.surface, padding: pad ? 16 : 4, paddingHorizontal: pad ? 16 : 4 }]}>{children}</View>;
 }
 function Eyebrow({ C, children }) {
-  return <Text style={{ color: C.muted, fontSize: 10.5, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 8 }}>{children}</Text>;
+  return <Text style={{ color: C.faint, fontSize: 11, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 10 }}>{children}</Text>;
 }
 function Stat({ C, v, l, color }) {
   return (
-    <View style={[styles.statBox, { backgroundColor: C.surface, borderColor: C.line }]}>
-      <Text style={{ color: color || C.text, fontSize: 20, fontWeight: '800', letterSpacing: -0.4 }}>{v}</Text>
-      <Text style={{ color: C.muted, fontSize: 10, fontWeight: '600', letterSpacing: 0.6, textTransform: 'uppercase', marginTop: 3 }}>{l}</Text>
+    <View style={[styles.statBox, { backgroundColor: C.surface }]}>
+      <Text style={[TNUM, { color: color || C.text, fontSize: 22, fontWeight: '800', letterSpacing: -0.5 }]}>{v}</Text>
+      <Text style={{ color: C.faint, fontSize: 10.5, fontWeight: '600', letterSpacing: 0.6, textTransform: 'uppercase', marginTop: 4 }}>{l}</Text>
     </View>
   );
 }
@@ -990,7 +991,7 @@ function Stepper({ C, label, sub, value, onDec, onInc, border }) {
 function TabBar({ C, tab, setTab, count, insets }) {
   const go = (t) => { haptic('light'); setTab(t); };
   return (
-    <View style={[styles.tabbar, { backgroundColor: C.surface, borderTopColor: C.line, paddingBottom: Math.max(insets.bottom, 8) }]}>
+    <View style={[styles.tabbar, { backgroundColor: C.ground, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.line, paddingBottom: Math.max(insets.bottom, 8) }]}>
       {[['screener', '▚', 'Screener'], ['portfolio', '◈', 'Portfolio']].map(([id, ic, label]) => {
         const on = tab === id;
         return (
@@ -999,11 +1000,11 @@ function TabBar({ C, tab, setTab, count, insets }) {
               <Text style={{ fontSize: 21, color: on ? C.accent : C.faint, textAlign: 'center' }}>{ic}</Text>
               {id === 'portfolio' && count > 0 ? (
                 <View style={[styles.badge, { backgroundColor: C.accent }]}>
-                  <Text style={{ color: C.accentInk, fontSize: 10, fontWeight: '800' }}>{count}</Text>
+                  <Text style={[TNUM, { color: C.accentInk, fontSize: 10, fontWeight: '800' }]}>{count}</Text>
                 </View>
               ) : null}
             </View>
-            <Text style={{ fontSize: 10.5, fontWeight: '600', color: on ? C.accent : C.faint, marginTop: 3 }}>{label}</Text>
+            <Text style={{ fontSize: 10.5, fontWeight: '700', color: on ? C.text : C.faint, marginTop: 3 }}>{label}</Text>
           </Pressable>
         );
       })}
@@ -1056,7 +1057,7 @@ function makeColorFor() {
 // initials tile if the image is missing or offline.
 function TickerLogo({ C, symbol, size = 46 }) {
   const [failed, setFailed] = useState(false);
-  const box = { width: size, height: size, borderRadius: 12, borderWidth: 1, borderColor: C.line };
+  const box = { width: size, height: size, borderRadius: 14 };
   if (failed) {
     return (
       <View style={[box, { backgroundColor: C.surface2, alignItems: 'center', justifyContent: 'center' }]}>
@@ -1096,53 +1097,54 @@ function topCorrelated(target, pool, asof, k = 3) {
 }
 
 /* ====================== styles ====================== */
+const TNUM = { fontVariant: ['tabular-nums'] };
 const styles = StyleSheet.create({
-  cardPanel: { borderRadius: 20, borderWidth: 1, marginBottom: 12 },
-  search: { borderWidth: 1, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 11, fontSize: 15, marginTop: 10 },
-  countLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4, paddingBottom: 10, paddingTop: 2 },
-  miniBtn: { paddingHorizontal: 11, paddingVertical: 6, borderRadius: 16, borderWidth: 1 },
-  card: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, borderWidth: 1, padding: 12, marginBottom: 8 },
-  cardTap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, minWidth: 0 },
-  rank: { width: 30, textAlign: 'center', fontSize: 13, fontWeight: '800' },
-  tick: { fontSize: 16.5, fontWeight: '800', letterSpacing: -0.2 },
-  cname: { fontSize: 12, marginTop: 1 },
-  csec: { fontSize: 10.5, marginTop: 2 },
-  big: { fontSize: 19, fontWeight: '800', letterSpacing: -0.4 },
-  metricSub: { fontSize: 10.5, marginTop: 1 },
-  selBtn: { width: 40, height: 40, borderRadius: 20, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  statRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
-  statBox: { flex: 1, borderRadius: 14, borderWidth: 1, paddingVertical: 12, alignItems: 'center' },
-  dstat: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, marginBottom: 14 },
-  ctlRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingVertical: 9 },
-  stepper: { flexDirection: 'row', alignItems: 'center', borderRadius: 10, borderWidth: 1 },
-  stepBtn: { width: 40, height: 34, alignItems: 'center', justifyContent: 'center' },
-  pill: { paddingHorizontal: 15, paddingVertical: 9, borderRadius: 20, borderWidth: 1 },
-  modeSeg: { flexDirection: 'row', borderRadius: 12, borderWidth: 1, padding: 3, gap: 3 },
-  modeBtn: { flex: 1, paddingVertical: 9, borderRadius: 9, alignItems: 'center' },
-  warn: { borderRadius: 14, borderWidth: 1, padding: 12, marginBottom: 12 },
-  sectorBar: { flexDirection: 'row', height: 26, borderRadius: 8, overflow: 'hidden', borderWidth: 1, marginTop: 8, marginBottom: 6 },
-  legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  cardPanel: { borderRadius: 22, marginBottom: 14 },
+  search: { borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, marginTop: 12 },
+  countLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 6, paddingBottom: 8, paddingTop: 6 },
+  miniBtn: { paddingHorizontal: 13, paddingVertical: 8, borderRadius: 18 },
+  card: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 15, paddingHorizontal: 10, borderRadius: 14 },
+  cardTap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, minWidth: 0 },
+  rank: { width: 24, textAlign: 'center', fontSize: 13, fontWeight: '700', ...TNUM },
+  tick: { fontSize: 17, fontWeight: '800', letterSpacing: -0.2 },
+  cname: { fontSize: 12.5, marginTop: 2 },
+  csec: { fontSize: 11, marginTop: 2 },
+  big: { fontSize: 21, fontWeight: '800', letterSpacing: -0.5, ...TNUM },
+  metricSub: { fontSize: 11.5, marginTop: 2, ...TNUM },
+  selBtn: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  statRow: { flexDirection: 'row', gap: 12, marginBottom: 14 },
+  statBox: { flex: 1, borderRadius: 18, paddingVertical: 16, alignItems: 'center' },
+  dstat: { flexDirection: 'row', gap: 12, paddingHorizontal: 16, marginBottom: 14 },
+  ctlRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingVertical: 12 },
+  stepper: { flexDirection: 'row', alignItems: 'center', borderRadius: 12 },
+  stepBtn: { width: 44, height: 38, alignItems: 'center', justifyContent: 'center' },
+  pill: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22 },
+  modeSeg: { flexDirection: 'row', borderRadius: 14, padding: 4, gap: 4 },
+  modeBtn: { flex: 1, paddingVertical: 11, borderRadius: 11, alignItems: 'center' },
+  warn: { borderRadius: 16, padding: 14, marginBottom: 14 },
+  sectorBar: { flexDirection: 'row', height: 28, borderRadius: 8, overflow: 'hidden', marginTop: 10, marginBottom: 8 },
+  legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 6 },
   sw: { width: 10, height: 10, borderRadius: 3 },
-  wrow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 11, paddingHorizontal: 14 },
-  wt: { width: 56, textAlign: 'right', fontSize: 16, fontWeight: '800' },
-  bar: { height: 7, borderRadius: 4, marginTop: 6, overflow: 'hidden' },
-  removeBtn: { width: 30, height: 30, borderRadius: 15, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  dback: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'center' },
-  tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
-  tag: { fontSize: 11, fontWeight: '600', borderWidth: 1, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4, overflow: 'hidden' },
-  perfRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 11, paddingHorizontal: 18 },
-  peerRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16 },
-  cta: { paddingVertical: 15, borderRadius: 14, borderWidth: 1, alignItems: 'center' },
-  tabbar: { flexDirection: 'row', borderTopWidth: 1, paddingTop: 8 },
+  wrow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 16 },
+  wt: { width: 58, textAlign: 'right', fontSize: 17, fontWeight: '800', ...TNUM },
+  bar: { height: 8, borderRadius: 4, marginTop: 7, overflow: 'hidden' },
+  removeBtn: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  dback: { paddingHorizontal: 12, paddingVertical: 12, flexDirection: 'row', alignItems: 'center' },
+  tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  tag: { fontSize: 12, fontWeight: '600', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, overflow: 'hidden' },
+  perfRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 15, paddingHorizontal: 18 },
+  peerRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16 },
+  cta: { paddingVertical: 17, borderRadius: 26, alignItems: 'center' },
+  tabbar: { flexDirection: 'row', paddingTop: 10 },
   tabBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   badge: { position: 'absolute', top: -6, left: 14, minWidth: 17, height: 17, borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
-  sheetBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.45)' },
-  sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, padding: 18, paddingBottom: 34 },
-  sheetHandle: { alignSelf: 'center', width: 40, height: 5, borderRadius: 3, marginBottom: 12 },
-  sheetTitle: { fontSize: 18, fontWeight: '800', marginBottom: 8 },
-  sheetRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, borderTopWidth: 1 },
-  filterLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', marginTop: 16, marginBottom: 8 },
-  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 20, borderWidth: 1 },
+  sheetBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)' },
+  sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 20, paddingBottom: 36 },
+  sheetHandle: { alignSelf: 'center', width: 40, height: 5, borderRadius: 3, marginBottom: 14 },
+  sheetTitle: { fontSize: 19, fontWeight: '800', marginBottom: 8 },
+  sheetRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 16, borderTopWidth: StyleSheet.hairlineWidth },
+  filterLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', marginTop: 18, marginBottom: 10 },
+  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  chip: { paddingHorizontal: 16, paddingVertical: 11, borderRadius: 22 },
 });
