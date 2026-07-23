@@ -216,6 +216,104 @@ def _cluster_var(cov, idx):
     return float(ivp @ sub @ ivp)
 
 
+# ---- Alternative weighting schemes (for comparison) ----------------------
+def equal_weights(returns_matrix):
+    """1/N."""
+    n = np.asarray(returns_matrix, float).shape[1]
+    return np.ones(n) / n
+
+
+def inverse_vol_weights(returns_matrix):
+    """w_i proportional to 1/sigma_i, normalized."""
+    R = np.asarray(returns_matrix, float)
+    cov = np.cov(R, rowvar=False, ddof=1)
+    n = cov.shape[0]
+    iv = np.zeros(n)
+    s = 0.0
+    for i in range(n):
+        sd = np.sqrt(cov[i, i]) if cov[i, i] > 0 else 0.0
+        iv[i] = 1.0 / sd if sd > 0 else 0.0
+        s += iv[i]
+    return iv / s if s > 0 else np.ones(n) / n
+
+
+def _mat_inverse(A):
+    """Gauss-Jordan inverse with partial pivoting; None if singular. Mirrors the
+    JS engine's matInverse exactly so the two agree to machine precision."""
+    A = [list(map(float, row)) for row in A]
+    n = len(A)
+    M = [A[i] + [1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+    for col in range(n):
+        piv, best = col, abs(M[col][col])
+        for r in range(col + 1, n):
+            v = abs(M[r][col])
+            if v > best:
+                best, piv = v, r
+        if best < 1e-14:
+            return None
+        if piv != col:
+            M[piv], M[col] = M[col], M[piv]
+        pv = M[col][col]
+        for j in range(2 * n):
+            M[col][j] /= pv
+        for r in range(n):
+            if r == col:
+                continue
+            f = M[r][col]
+            if f != 0:
+                for j in range(2 * n):
+                    M[r][j] -= f * M[col][j]
+    return [row[n:] for row in M]
+
+
+def min_var_weights(returns_matrix):
+    """Long-only global minimum-variance: w proportional to inv(cov) @ 1, dropping
+    the most negative name until all >= 0. Mirrors the JS engine's minVarWeights."""
+    R = np.asarray(returns_matrix, float)
+    cov = np.cov(R, rowvar=False, ddof=1)
+    n = cov.shape[0]
+    EPS = 1e-9
+    active = list(range(n))
+    w = np.zeros(n)
+    for _ in range(n):
+        m = len(active)
+        if m == 1:
+            w = np.zeros(n); w[active[0]] = 1.0; return w
+        sub = [[cov[i, j] for j in active] for i in active]
+        inv = _mat_inverse(sub)
+        if inv is None:
+            iv = []; s = 0.0
+            for i in active:
+                sd = np.sqrt(cov[i, i]) if cov[i, i] > 0 else 0.0
+                v = 1.0 / sd if sd > 0 else 0.0
+                iv.append(v); s += v
+            w = np.zeros(n)
+            for k, i in enumerate(active):
+                w[i] = iv[k] / s if s > 0 else 1.0 / m
+            return w
+        raw = [sum(inv[i]) for i in range(m)]
+        tot = sum(raw)
+        if abs(tot) < 1e-18:
+            w = np.zeros(n)
+            for i in active:
+                w[i] = 1.0 / m
+            return w
+        ws = [x / tot for x in raw]
+        minv, mink = -EPS, -1
+        for k in range(m):
+            if ws[k] < minv:
+                minv, mink = ws[k], k
+        if mink < 0:
+            cl = [x if x > 0 else 0.0 for x in ws]
+            s = sum(cl)
+            w = np.zeros(n)
+            for k, i in enumerate(active):
+                w[i] = cl[k] / s if s > 0 else 1.0 / m
+            return w
+        active = [a for k, a in enumerate(active) if k != mink]
+    return w
+
+
 # ---- Constraint redistribution -------------------------------------------
 def apply_caps(weights, sectors, max_stock=None, max_sector=None,
                min_stock=None, tol=1e-9, max_iter=2000):

@@ -57,6 +57,10 @@ secs = [tk[s]["sector"] for s in sel]
 wc, ok, _ = ref.apply_caps(w, secs, max_stock=0.15, max_sector=0.45)
 # min-weight floor case (5% floor binds on the smaller HRP weights)
 wm, okm, _ = ref.apply_caps(w, secs, max_stock=0.15, max_sector=0.45, min_stock=0.05)
+# alternative weighting schemes (same selection / returns matrix)
+w_eq = ref.equal_weights(R)
+w_iv = ref.inverse_vol_weights(R)
+w_mv = ref.min_var_weights(R)
 
 out = {
     "asof": asof,
@@ -70,6 +74,11 @@ out = {
              "weights": [float(x) for x in wc], "feasible": bool(ok)},
     "capsMin": {"maxStock": 0.15, "maxSector": 0.45, "minStock": 0.05,
                 "weights": [float(x) for x in wm], "feasible": bool(okm)},
+    "schemes": {
+        "equal": [float(x) for x in w_eq],
+        "invvol": [float(x) for x in w_iv],
+        "minvar": [float(x) for x in w_mv],
+    },
 }
 json.dump(out, open("build/expected.json", "w"), indent=0)
 print(f"dumped expected.json: {len(sm)} sharpe rows, {len(CONFIGS)} score configs, HRP on {len(sel)} names")

@@ -23,7 +23,8 @@ function grab(name){
 }
 const NAMES = ['simpleReturns','mean','sampleStd','sharpeMomentum','momentumDaily',
   'annualizeStats','olsFit','momentumScore','covMatrix','corrFromCov',
-  'quasiDiagOrder','clusterVar','recursiveBisection','hrpWeights','applyCaps','pct'];
+  'quasiDiagOrder','clusterVar','recursiveBisection','hrpWeights',
+  'equalWeights','inverseVolWeights','matInverse','minVarWeights','applyCaps','pct'];
 const src = 'const TD=252;\n' + NAMES.map(grab).join('\n') +
   '\nexport {' + NAMES.join(',') + '};';
 fs.writeFileSync('build/_engine.mjs', src);
@@ -100,9 +101,29 @@ for (let i = 0; i < sel.length; i++)
 chk(Math.min(...capm.w) >= cm.minStock - 1e-9, 'min floor respected');
 chk(Math.max(...capm.w) <= cm.maxStock + 1e-9, 'capsMin stock cap respected');
 
+// 3c) Alternative weighting schemes (equal / inverse-vol / long-only min-var)
+const sch = expected.schemes;
+const wEq = eng.equalWeights(R), wIv = eng.inverseVolWeights(R), wMv = eng.minVarWeights(R);
+for (const [name, wj, we] of [['equal', wEq, sch.equal], ['invvol', wIv, sch.invvol], ['minvar', wMv, sch.minvar]]) {
+  chk(close(wj.reduce((a,b)=>a+b,0), 1, 1e-9), `${name} sums to 1`);
+  chk(wj.every(x => x >= -1e-9), `${name} long-only`);
+  for (let i = 0; i < sel.length; i++)
+    chk(close(wj[i], we[i], 1e-6), `${name} ${sel[i]} ${wj[i]} vs ${we[i]}`);
+}
+// matInverse round-trips (A · A⁻¹ ≈ I) on the basket covariance
+const covB = eng.covMatrix(R), invB = eng.matInverse(covB), nB = covB.length;
+let idOk = invB != null;
+for (let i = 0; i < nB && idOk; i++) for (let j = 0; j < nB; j++) {
+  let s = 0; for (let k = 0; k < nB; k++) s += covB[i][k] * invB[k][j];
+  if (!close(s, i === j ? 1 : 0, 1e-6)) idOk = false;
+}
+chk(idOk, 'matInverse · cov ≈ I');
+
 // 4) Determinism
 const w2 = eng.hrpWeights(R);
 chk(w.every((x,i)=>x===w2[i]), 'HRP deterministic');
+const mv2 = eng.minVarWeights(R);
+chk(wMv.every((x,i)=>x===mv2[i]), 'minVar deterministic');
 
 fs.unlinkSync('build/_engine.mjs');
 
