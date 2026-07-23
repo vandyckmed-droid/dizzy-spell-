@@ -190,8 +190,10 @@ function Root() {
   const persist = useCallback((next) => {
     // keep asofDate (the durable key) in sync with the numeric asof index so
     // the window survives snapshot rebuilds that shift the calendar
-    const synced = next && typeof next.asof === 'number' && snap.dates[next.asof]
+    const dated = next && typeof next.asof === 'number' && snap.dates[next.asof]
       ? { ...next, asofDate: snap.dates[next.asof] } : next;
+    // mirror the live `selected` back into the active book before saving
+    const synced = syncBooks(dated);
     setSt(synced);
     AsyncStorage.setItem(STORE_KEY, JSON.stringify(synced)).catch(() => {});
   }, [snap]);
@@ -236,14 +238,65 @@ function Root() {
 }
 
 /* ---------------- state helpers ---------------- */
+// Holdings live in named "books" — a book is a portfolio (HRP-weighted) or a
+// watchlist (unweighted tracked list). `st.selected` always mirrors the ACTIVE
+// book's holdings, so every existing read/write of `st.selected` keeps working;
+// `syncBooks` (called in persist) writes those edits back into the active book.
+function parseBooks(saved) {
+  const raw = Array.isArray(saved.books) && saved.books.length ? saved.books : null;
+  const books = (raw || [{ id: 'b1', name: 'Portfolio', kind: 'portfolio',
+                           selected: Array.isArray(saved.selected) ? saved.selected : [] }])
+    .map((b, i) => ({
+      id: String(b.id || 'b' + (i + 1)),
+      name: String(b.name || 'Book ' + (i + 1)).slice(0, 24) || 'Book ' + (i + 1),
+      kind: b.kind === 'watchlist' ? 'watchlist' : 'portfolio',
+      selected: Array.isArray(b.selected) ? b.selected.filter(x => typeof x === 'string') : [],
+    }));
+  const activeBook = books.some(b => b.id === saved.activeBook) ? saved.activeBook : books[0].id;
+  return { books, activeBook, selected: books.find(b => b.id === activeBook).selected };
+}
+function syncBooks(s) {
+  if (!Array.isArray(s.books) || !s.activeBook) return s;
+  return { ...s, books: s.books.map(b => b.id === s.activeBook ? { ...b, selected: s.selected } : b) };
+}
+let bookSeq = 0;
+function newBookId() { return 'b' + Date.now() + '_' + (bookSeq++); }
+function activeBookOf(st) { return st.books.find(b => b.id === st.activeBook) || st.books[0]; }
+function switchBook(st, id) {
+  const b = st.books.find(x => x.id === id);
+  return b ? { ...st, activeBook: id, selected: b.selected } : st;
+}
+function addBook(st, kind) {
+  const id = newBookId();
+  const n = st.books.filter(b => b.kind === kind).length + 1;
+  const name = (kind === 'watchlist' ? 'Watchlist ' : 'Portfolio ') + n;
+  return { ...st, books: [...st.books, { id, name, kind, selected: [] }], activeBook: id, selected: [] };
+}
+function renameBook(st, id, name) {
+  const nm = (name || '').trim().slice(0, 24) || activeBookOf(st).name;
+  return { ...st, books: st.books.map(b => b.id === id ? { ...b, name: nm } : b) };
+}
+function setBookKind(st, id, kind) {
+  return { ...st, books: st.books.map(b => b.id === id ? { ...b, kind } : b) };
+}
+function deleteBook(st, id) {
+  if (st.books.length <= 1) return st;                    // always keep one book
+  const books = st.books.filter(b => b.id !== id);
+  const activeBook = st.activeBook === id ? books[0].id : st.activeBook;
+  return { ...st, books, activeBook, selected: books.find(b => b.id === activeBook).selected };
+}
+
 function normalizeState(saved) {
+  const bk = parseBooks(saved);
   return {
     universe: saved.universe || null,
     asof: saved.asof ?? null,
     asofDate: saved.asofDate || null,
     start: saved.start ?? DEF_START,
     end: saved.end ?? DEF_END,
-    selected: Array.isArray(saved.selected) ? saved.selected : [],
+    books: bk.books,
+    activeBook: bk.activeBook,
+    selected: bk.selected,
     maxStock: saved.maxStock ?? 0,
     maxSector: saved.maxSector ?? 0,
     minStock: saved.minStock ?? 0,
@@ -302,6 +355,8 @@ function toggleSel(st, sym) {
 function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refreshing, onRefresh }) {
   const [filterOpen, setFilterOpen] = useState(false);
   const [cueOpen, setCueOpen] = useState(false);
+  const [booksOpen, setBooksOpen] = useState(false);
+  const activeBk = activeBookOf(st);
   const pulse = useRef(new Animated.Value(1)).current;
   const dir = st.sortDir === 'asc' ? 1 : -1;
   const betaWindow = snap.betaWindow || 756;
@@ -391,6 +446,17 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
   const header = (
     <View>
       <AppHeader C={C} snap={snap} />
+      <Pressable onPress={() => setBooksOpen(true)} accessibilityLabel="Switch or manage book"
+        style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: C.surface2, borderColor: C.line, borderWidth: 1, borderRadius: 12, paddingHorizontal: 13, paddingVertical: 9, marginBottom: 10 }}>
+        <Text style={{ color: C.faint, fontSize: 12 }}>Adding to</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+          <Text style={{ color: C.text, fontSize: 13, fontWeight: '700' }}>
+            {activeBk.kind === 'watchlist' ? '☆ ' : '◆ '}{activeBk.name}
+          </Text>
+          <Text style={[TNUM, { color: C.faint, fontSize: 12, fontWeight: '700' }]}>{st.selected.length}</Text>
+          <Text style={{ color: C.accent, fontSize: 12, fontWeight: '700' }}>Switch ›</Text>
+        </View>
+      </Pressable>
       <Card C={C}>
         <Eyebrow C={C}>Universe</Eyebrow>
         <Segmented C={C}
@@ -541,6 +607,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
       <FilterSheet C={C} visible={filterOpen} onClose={() => setFilterOpen(false)}
         st={st} setFilter={setFilter} />
       <CueSheet C={C} visible={cueOpen} onClose={() => setCueOpen(false)} st={st} persist={persist} />
+      <BooksSheet C={C} visible={booksOpen} onClose={() => setBooksOpen(false)} st={st} persist={persist} />
     </Animated.View>
   );
 }
@@ -790,8 +857,141 @@ function FilterSheet({ C, visible, onClose, st, setFilter }) {
 }
 
 /* ====================== Portfolio ====================== */
+/* ---- saved books: portfolio (HRP) or watchlist (unweighted) ---- */
+function BookSwitcher({ C, st, persist, onManage }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 2 }} style={{ flex: 1 }}>
+        {st.books.map(b => {
+          const on = b.id === st.activeBook;
+          return (
+            <Pressable key={b.id} onPress={() => { if (!on) { animateNext(); haptic('select'); persist(switchBook(st, b.id)); } }}
+              accessibilityRole="button" accessibilityState={{ selected: on }} accessibilityLabel={`Book ${b.name}`}
+              style={[styles.bookPill, { backgroundColor: on ? C.accent : C.surface2, borderColor: on ? C.accent : C.line }]}>
+              <Text style={{ color: on ? C.accentInk : C.muted, fontSize: 12.5, fontWeight: '700' }}>
+                {b.kind === 'watchlist' ? '☆ ' : '◆ '}{b.name}
+              </Text>
+              <Text style={{ color: on ? C.accentInk : C.faint, fontSize: 11, fontWeight: '800', ...TNUM }}>{b.selected.length}</Text>
+            </Pressable>
+          );
+        })}
+        <Pressable onPress={() => { animateNext(); haptic('select'); persist(addBook(st, 'portfolio')); }}
+          accessibilityLabel="New book"
+          style={[styles.bookPill, { backgroundColor: 'transparent', borderColor: C.line, borderStyle: 'dashed' }]}>
+          <Text style={{ color: C.accent, fontSize: 12.5, fontWeight: '700' }}>＋ New</Text>
+        </Pressable>
+      </ScrollView>
+      {onManage ? (
+        <Pressable onPress={onManage} hitSlop={8} accessibilityLabel="Manage book"
+          style={{ width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface2, borderWidth: 1, borderColor: C.line }}>
+          <Text style={{ color: C.muted, fontSize: 16, marginTop: -5, fontWeight: '800' }}>⋯</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+function BooksSheet({ C, visible, onClose, st, persist }) {
+  const b = activeBookOf(st);
+  const [name, setName] = useState(b.name);
+  useEffect(() => { if (visible) setName(b.name); }, [visible, b.id]);
+  const commitName = () => { const v = name.trim(); if (v && v !== b.name) persist(renameBook(st, b.id, v)); };
+  const del = () => {
+    if (st.books.length <= 1) return;
+    Alert.alert('Delete book?', `Delete “${b.name}” and its ${b.selected.length} name${b.selected.length === 1 ? '' : 's'}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => { haptic('warn'); persist(deleteBook(st, b.id)); } },
+    ]);
+  };
+  return (
+    <Sheet C={C} visible={visible} onClose={onClose}>
+      <Text style={[styles.sheetTitle, { color: C.text }]}>Books</Text>
+      <BookSwitcher C={C} st={st} persist={persist} />
+      <View style={{ height: 1, backgroundColor: C.line, marginBottom: 14 }} />
+      <Text style={{ color: C.faint, fontSize: 11, fontWeight: '700', letterSpacing: 0.4, marginBottom: 6 }}>ACTIVE BOOK · NAME</Text>
+      <TextInput value={name} onChangeText={setName} onBlur={commitName} onSubmitEditing={commitName}
+        placeholder="Book name" placeholderTextColor={C.faint} maxLength={24} returnKeyType="done"
+        style={{ color: C.text, fontSize: 15, backgroundColor: C.surface2, borderRadius: 10, borderWidth: 1, borderColor: C.line, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 14 }} />
+      <Text style={{ color: C.faint, fontSize: 11, fontWeight: '700', letterSpacing: 0.4, marginBottom: 6 }}>TYPE</Text>
+      <SegBar C={C} value={b.kind} onChange={(k) => { if (k !== b.kind) { haptic('select'); persist(setBookKind(st, b.id, k)); } }}
+        options={[{ key: 'portfolio', label: '◆ Portfolio' }, { key: 'watchlist', label: '☆ Watchlist' }]} />
+      <Text style={{ color: C.faint, fontSize: 11.5, lineHeight: 16, marginTop: 8 }}>
+        Portfolio books get HRP weights, caps and the min-weight floor. Watchlist books are an unweighted tracked list — just the blended momentum score.
+      </Text>
+      <Pressable onPress={del} disabled={st.books.length <= 1}
+        style={{ alignSelf: 'flex-start', marginTop: 18, opacity: st.books.length <= 1 ? 0.4 : 1, paddingHorizontal: 16, paddingVertical: 9, borderRadius: 20, backgroundColor: C.lossSoft, borderWidth: 1, borderColor: C.loss }}>
+        <Text style={{ color: C.loss, fontSize: 12.5, fontWeight: '700' }}>Delete book</Text>
+      </Pressable>
+    </Sheet>
+  );
+}
+
+// watchlist rows: holdings scored by the same blended momentum as the screener
+function watchlistRows(snap, BYSYM, market, st) {
+  const bw = snap.betaWindow || 756;
+  const c = cfgOf(st, bw), cB = cfgOfB(st, bw);
+  const rows = [];
+  for (const s of st.selected) {
+    const t = BYSYM[s]; if (!t) continue;
+    const r = E.momentumScore(t.closes, market, st.asof, c);
+    const rB = st.winB ? E.momentumScore(t.closes, market, st.asof, cB) : null;
+    const okB = rB && rB.score != null && !Number.isNaN(rB.score);
+    const score = r && r.score != null && !Number.isNaN(r.score)
+      ? (st.winB && okB ? (r.score + rB.score) / 2 : r.score) : null;
+    rows.push({ s, t, m: r, score });
+  }
+  rows.sort((a, b) => (b.score ?? -1e18) - (a.score ?? -1e18));
+  return rows;
+}
+
+function WatchlistBody({ C, snap, BYSYM, market, st, persist, onOpen }) {
+  const rows = useMemo(() => watchlistRows(snap, BYSYM, market, st),
+    [snap, BYSYM, market, st.selected, st.asof, st.start, st.end, st.winB, st.bStart, st.bEnd, st.mode, st.removeMkt, st.matchVol, st.volStart, st.volEnd]);
+  const colorFor = useMemo(() => makeColorFor(), [snap]);
+  if (!rows.length) return <Empty C={C} watch />;
+  const clear = () => Alert.alert('Clear watchlist?', `Remove all ${rows.length} name${rows.length === 1 ? '' : 's'}?`, [
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Clear', style: 'destructive', onPress: () => { haptic('warn'); persist({ ...st, selected: [] }); } },
+  ]);
+  return (
+    <>
+      <View style={styles.statRow}>
+        <Stat C={C} v={String(rows.length)} l="Names" />
+        <Stat C={C} v={String(new Set(rows.map(r => r.t.sector)).size)} l="Sectors" />
+      </View>
+      <Card C={C} pad={false}>
+        {rows.map((r, idx) => (
+          <View key={r.s} style={[styles.wrow, { borderTopColor: C.line, borderTopWidth: idx ? 1 : 0 }]}>
+            <Text style={[styles.rank, { color: C.faint }]}>{idx + 1}</Text>
+            <Pressable style={{ flex: 1, minWidth: 0 }} onPress={() => onOpen(r.s)}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+                <View style={[styles.sw, { backgroundColor: colorFor(r.t.sector) }]} />
+                <Text style={{ color: C.text, fontWeight: '700', fontSize: 14.5 }}>{r.t.symbol}</Text>
+              </View>
+              <Text numberOfLines={1} style={{ color: C.faint, fontSize: 12, marginTop: 2 }}>{r.t.name}</Text>
+            </Pressable>
+            <Text style={[styles.big, { color: r.score == null ? C.faint : metricColor(st.mode === 'vol' ? 0 : (r.m ? r.m.annRet : 0), st.mode, C), marginRight: 8 }]}>
+              {metricStr(r.score, st.mode)}
+            </Text>
+            <Pressable onPress={() => persist(toggleSel(st, r.s))} hitSlop={8}
+              style={[styles.removeBtn, { backgroundColor: C.surface2, borderColor: C.line }]}>
+              <Text style={{ color: C.muted, fontSize: 16, marginTop: -2 }}>×</Text>
+            </Pressable>
+          </View>
+        ))}
+      </Card>
+      <Pressable onPress={clear} accessibilityLabel="Clear watchlist"
+        style={{ alignSelf: 'center', marginTop: 18, paddingHorizontal: 20, paddingVertical: 11, borderRadius: 22, backgroundColor: C.lossSoft, borderWidth: 1, borderColor: C.loss }}>
+        <Text style={{ color: C.loss, fontSize: 13, fontWeight: '700' }}>✕ Clear watchlist · {rows.length}</Text>
+      </Pressable>
+    </>
+  );
+}
+
 function Portfolio({ C, snap, market, st, persist, onOpen, refreshing, onRefresh }) {
   const [infoOpen, setInfoOpen] = useState(false);
+  const [booksOpen, setBooksOpen] = useState(false);
+  const activeKind = activeBookOf(st).kind;
   const BYSYM = useMemo(() => Object.fromEntries(snap.tickers.map(t => [t.symbol, t])), [snap]);
   const pf = useMemo(() => computePortfolio(snap, BYSYM, st), [snap, st.selected, st.asof, st.maxStock, st.maxSector, st.minStock]);
   const guide = useMemo(() => portfolioGuidance(snap, BYSYM, st, market, pf),
@@ -827,6 +1027,11 @@ function Portfolio({ C, snap, market, st, persist, onOpen, refreshing, onRefresh
     <ScrollView contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 96 }}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} />}>
       <AppHeader C={C} snap={snap} />
+      <BookSwitcher C={C} st={st} persist={persist} onManage={() => setBooksOpen(true)} />
+      {activeKind === 'watchlist' ? (
+        <WatchlistBody C={C} snap={snap} BYSYM={BYSYM} market={market} st={st} persist={persist} onOpen={onOpen} />
+      ) : (
+      <>
       <View style={styles.statRow}>
         <Stat C={C} v={String(pf.syms.length)} l="Holdings" />
         <Stat C={C} v={pf.syms.length ? (total * 100).toFixed(total > 0.9999 && total < 1.0001 ? 0 : 1) + '%' : '0%'} l="Allocated" />
@@ -913,7 +1118,10 @@ function Portfolio({ C, snap, market, st, persist, onOpen, refreshing, onRefresh
           </Pressable>
         </>
       )}
+      </>
+      )}
       <PortfolioInfoSheet C={C} visible={infoOpen} onClose={() => setInfoOpen(false)} snap={snap} />
+      <BooksSheet C={C} visible={booksOpen} onClose={() => setBooksOpen(false)} st={st} persist={persist} />
     </ScrollView>
   );
 }
@@ -1784,13 +1992,17 @@ function TabBar({ C, tab, setTab, count, insets }) {
     </View>
   );
 }
-function Empty({ C }) {
+function Empty({ C, watch }) {
   return (
     <View style={{ alignItems: 'center', paddingVertical: 48, paddingHorizontal: 20 }}>
-      <Text style={{ fontSize: 40, color: C.muted, marginBottom: 10 }}>◈</Text>
-      <Text style={{ color: C.text, fontSize: 17, fontWeight: '700', marginBottom: 6 }}>No holdings yet</Text>
+      <Text style={{ fontSize: 40, color: C.muted, marginBottom: 10 }}>{watch ? '☆' : '◈'}</Text>
+      <Text style={{ color: C.text, fontSize: 17, fontWeight: '700', marginBottom: 6 }}>
+        {watch ? 'Nothing on this watchlist' : 'No holdings yet'}
+      </Text>
       <Text style={{ color: C.muted, fontSize: 14, textAlign: 'center', lineHeight: 20 }}>
-        Add names from the Screener with the + button. HRP weights compute automatically.
+        {watch
+          ? 'Add names from the Screener with the + button. They’re tracked by momentum score — no weighting.'
+          : 'Add names from the Screener with the + button. HRP weights compute automatically.'}
       </Text>
     </View>
   );
@@ -1926,6 +2138,7 @@ const styles = StyleSheet.create({
   search: { borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, marginTop: 12 },
   countLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 6, paddingBottom: 8, paddingTop: 6 },
   miniBtn: { paddingHorizontal: 13, paddingVertical: 8, borderRadius: 18 },
+  bookPill: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 13, paddingVertical: 8, borderRadius: 18, borderWidth: 1 },
   resetBtn: { paddingHorizontal: 11, paddingVertical: 5, borderRadius: 14, borderWidth: 1 },
   tileGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8, marginBottom: 14 },
   tile: { width: '47.8%', flexGrow: 1, borderRadius: 18, padding: 13 },
