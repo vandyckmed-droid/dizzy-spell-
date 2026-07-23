@@ -66,6 +66,22 @@ Status: ✅ done · 🚧 in progress · ⬜ planned/candidate.
 - ✅ 🟢 Detail shows **β and annualized α (vs VTI, 756d OLS)** per name.
 - All 7 scoring configs cross-checked against the NumPy reference (**991 checks**).
 
+### V6 — Markets tab (macro intraday) + window defaults
+- ✅ 🟡 **Markets tab** (chrome now Screener · Portfolio · Markets) — a macro dashboard for
+  **SPY / TLT / XLE / GLD**: 2×2 tiles (last · day change · live sparkline), tap to select.
+- ✅ 🟡 **Rich price chart** — timeframe **1D (5-min intraday) · 6M · 1Y (daily)**, chart type
+  **Line / OHLC bars**, crosshair scrub with haptics, prev-close reference on 1D.
+- ✅ 🟢 **Configurable EMAs** — EMA-50 (blue) + EMA-200 (amber) overlays on the daily views,
+  each with an on/off toggle and an adjustable period (2–400); warmed with off-screen history.
+- ✅ 🟡 **Intraday pipeline** (`build/fetch_intraday.py`) — 5-min bars (~10 sessions) + daily OHLC
+  (`historical-price-eod/full`) for the macro set, merged into the snapshot; refreshable on its
+  own without rebuilding the 500-name EOD layer.
+- ✅ 🟢 **Default 12–1 window rounded to 250 → 20** (was 252 → 21) — cleaner, absorbs occasional
+  EOD-data lag; one-tap **↺ 12–1 reset** chip on the return-window card.
+- ✅ 🟢 EOD snapshot refreshed through the latest close; numerics re-validated (991 + 1193 checks).
+- Note: intraday is a **build-time** layer (the delivered Snack is key-free and makes no live
+  calls) — refreshed when the pipeline is re-run. Intraday for all 500 names isn't baked (size).
+
 ### Basket-aware screening
 - ✅ 🟡 **Correlation-to-basket cue** in the ranked list — as you walk down, each unselected
   name is scored by its **max daily-return correlation vs the names you've already selected**

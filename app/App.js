@@ -54,6 +54,13 @@ const palettes = {
 // categorical palette tuned for the near-black theme (distinct from the semantic green/red)
 const SECTOR_COLORS = ['#5AC8FA','#BF5AF2','#FF9F0A','#5E5CE6','#64D2FF','#FF6482','#FFD60A','#40C8B0','#C7A06A','#FF8A5B','#9CA3AF'];
 const PERIODS = [['5-day',5],['10-day',10],['1-month',21],['3-month',63],['6-month',126],['1-year',252]];
+// Default 12–1 momentum window, rounded (250→20 instead of 252→21): cleaner and
+// leaves a day of slack for occasional end-of-day data lag.
+const DEF_START = 250, DEF_END = 20;
+// Macro dashboard chart config
+const MACRO_TFS = ['1D', '6M', '1Y'];
+const CHART_TYPES = [{ key: 'line', label: 'Line' }, { key: 'ohlc', label: 'Bars' }];
+const EMA_COLORS = ['#5AC8FA', '#FF9F0A'];   // EMA-1 (blue), EMA-2 (amber)
 
 // Ranking modes. The score is: return (annualized), volatility (annualized), or
 // their ratio (Sharpe). Return/vol windows are configurable; market influence is
@@ -176,8 +183,10 @@ function Root() {
         {tab === 'screener'
           ? <Screener C={C} snap={snap} market={market} st={st} persist={persist} query={query} setQuery={setQuery}
               onOpen={setDetail} refreshing={refreshing} onRefresh={onRefresh} />
-          : <Portfolio C={C} snap={snap} st={st} persist={persist} onOpen={setDetail}
-              refreshing={refreshing} onRefresh={onRefresh} />}
+          : tab === 'portfolio'
+          ? <Portfolio C={C} snap={snap} st={st} persist={persist} onOpen={setDetail}
+              refreshing={refreshing} onRefresh={onRefresh} />
+          : <Macro C={C} snap={snap} st={st} persist={persist} refreshing={refreshing} onRefresh={onRefresh} />}
       </Animated.View>
       <TabBar C={C} tab={tab} setTab={setTab} count={st.selected.length} insets={insets} />
       <Modal visible={!!detail} animationType="slide" onRequestClose={() => setDetail(null)} presentationStyle="fullScreen">
@@ -195,8 +204,8 @@ function normalizeState(saved) {
     universe: saved.universe || null,
     asof: saved.asof ?? null,
     asofDate: saved.asofDate || null,
-    start: saved.start ?? 252,
-    end: saved.end ?? 21,
+    start: saved.start ?? DEF_START,
+    end: saved.end ?? DEF_END,
     selected: Array.isArray(saved.selected) ? saved.selected : [],
     maxStock: saved.maxStock ?? 0,
     maxSector: saved.maxSector ?? 0,
@@ -208,6 +217,14 @@ function normalizeState(saved) {
     sortDir: saved.sortDir || 'desc',
     capBand: saved.capBand || 'all',
     exch: Array.isArray(saved.exch) ? saved.exch : [],
+    // macro dashboard prefs
+    macroSym: saved.macroSym || null,
+    macroTf: MACRO_TFS.includes(saved.macroTf) ? saved.macroTf : '1D',
+    macroType: ['line', 'ohlc'].includes(saved.macroType) ? saved.macroType : 'line',
+    ema1On: saved.ema1On == null ? true : !!saved.ema1On,
+    ema1P: saved.ema1P ?? 50,
+    ema2On: saved.ema2On == null ? true : !!saved.ema2On,
+    ema2P: saved.ema2P ?? 200,
   };
 }
 function clampState(s, snap) {
@@ -322,7 +339,19 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
       </Card>
 
       <Card C={C}>
-        <Eyebrow C={C}>Return window · trading days</Eyebrow>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Eyebrow C={C}>Return window · trading days</Eyebrow>
+          {(() => {
+            const isDef = st.start === DEF_START && st.end === DEF_END && st.asof === snap.dates.length - 1;
+            return (
+              <Pressable disabled={isDef} accessibilityLabel="Reset window to default 12-1"
+                onPress={() => setWin({ start: DEF_START, end: DEF_END, asof: snap.dates.length - 1 })}
+                style={[styles.resetBtn, { borderColor: isDef ? C.line : C.accent, opacity: isDef ? 0.4 : 1 }]}>
+                <Text style={{ color: isDef ? C.faint : C.accent, fontSize: 11.5, fontWeight: '800' }}>↺ 12–1</Text>
+              </Pressable>
+            );
+          })()}
+        </View>
         <Stepper C={C} label="As-of date" sub={snap.dates[st.asof]}
           value={snap.dates[st.asof].slice(5)}
           onDec={() => st.asof > st.start && setWin({ asof: st.asof - 1 })}
@@ -974,6 +1003,324 @@ function ScrubChart({ C, snap, ticker, st }) {
   );
 }
 
+/* ====================== Macro dashboard ====================== */
+// Exponential moving average, seeded with the SMA of the first `period` points.
+// Returns an array aligned to `vals` (null until the average is warm).
+function emaSeries(vals, period) {
+  const out = new Array(vals.length).fill(null);
+  if (!vals || period < 2 || vals.length < period) return out;
+  const k = 2 / (period + 1);
+  let sma = 0;
+  for (let i = 0; i < period; i++) sma += vals[i];
+  let prev = sma / period;
+  out[period - 1] = prev;
+  for (let i = period; i < vals.length; i++) { prev = vals[i] * k + prev * (1 - k); out[i] = prev; }
+  return out;
+}
+
+// Slice a macro symbol's stored series to the chosen timeframe. Daily timeframes
+// carry the full daily closes (fullC) + offset (from) so EMAs stay warm at the
+// left edge; the 1D view is the latest intraday session, based off prior close.
+function macroView(ser, tf) {
+  if (tf === '1D') {
+    const it = ser.intraday, t = it.t, n = t.length;
+    const day = t[n - 1].slice(0, 10);
+    let s = n - 1;
+    while (s > 0 && t[s - 1].slice(0, 10) === day) s--;
+    const dd = ser.daily.d; let prev = null;
+    for (let i = dd.length - 1; i >= 0; i--) { if (dd[i] < day) { prev = ser.daily.c[i]; break; } }
+    return { isIntraday: true, from: 0, fullC: null,
+      labels: t.slice(s), o: it.o.slice(s), h: it.h.slice(s), l: it.l.slice(s), c: it.c.slice(s),
+      baseline: prev != null ? prev : it.o[s] };
+  }
+  const dl = ser.daily, n = dl.c.length, count = tf === '6M' ? 126 : 252;
+  const from = Math.max(0, n - count), sl = (a) => a.slice(from);
+  const c = sl(dl.c);
+  return { isIntraday: false, from, fullC: dl.c,
+    labels: sl(dl.d), o: sl(dl.o), h: sl(dl.h), l: sl(dl.l), c, baseline: c[0] };
+}
+
+const fmtLabel = (s, intraday) => intraday ? s.slice(11, 16) : shortDate(s);
+
+function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P }) {
+  const [w, setW] = useState(0);
+  const [idx, setIdx] = useState(null);
+  const H = 244, padX = 8, padTop = 16, padBot = 22;
+  const v = useMemo(() => macroView(ser, tf), [ser, tf]);
+  const n = v.c.length;
+  const daily = !v.isIntraday;
+  const ema1 = useMemo(() => (daily && ema1On && v.fullC) ? emaSeries(v.fullC, ema1P).slice(v.from) : null, [daily, ema1On, ema1P, v]);
+  const ema2 = useMemo(() => (daily && ema2On && v.fullC) ? emaSeries(v.fullC, ema2P).slice(v.from) : null, [daily, ema2On, ema2P, v]);
+
+  let lo = Infinity, hi = -Infinity;
+  const bump = (x) => { if (x != null) { if (x < lo) lo = x; if (x > hi) hi = x; } };
+  if (type === 'ohlc') for (let i = 0; i < n; i++) { bump(v.h[i]); bump(v.l[i]); }
+  else for (let i = 0; i < n; i++) bump(v.c[i]);
+  if (ema1) ema1.forEach(bump);
+  if (ema2) ema2.forEach(bump);
+  if (v.isIntraday) bump(v.baseline);
+  if (!isFinite(lo)) { lo = 0; hi = 1; }
+  const rng = (hi - lo) || 1;
+  const X = (i) => padX + (n <= 1 ? 0 : (i / (n - 1)) * (w - 2 * padX));
+  const Y = (val) => padTop + (1 - (val - lo) / rng) * (H - padTop - padBot);
+
+  const active = idx == null ? n - 1 : idx;
+  const price = v.c[active];
+  const last = v.c[n - 1];
+  const chg = price / v.baseline - 1;
+  const up = last >= v.baseline;
+  const col = up ? C.gain : C.loss;
+  const ctx = v.isIntraday ? 'vs prev close' : (tf === '6M' ? 'over 6 months' : 'over 1 year');
+
+  const onTouch = (e) => {
+    if (!w) return;
+    let i = Math.round(((e.nativeEvent.locationX - padX) / (w - 2 * padX)) * (n - 1));
+    i = Math.max(0, Math.min(n - 1, i));
+    if (i !== idx) { setIdx(i); haptic('light'); }
+  };
+
+  // geometry
+  let line = '', area = '', upP = '', dnP = '';
+  const step = n > 1 ? (w - 2 * padX) / (n - 1) : w;
+  const tick = Math.max(1.4, Math.min(4.5, step * 0.34));
+  if (w > 0 && n > 1) {
+    if (type === 'line') {
+      line = `M ${X(0)} ${Y(v.c[0])}`;
+      for (let i = 1; i < n; i++) line += ` L ${X(i)} ${Y(v.c[i])}`;
+      area = line + ` L ${X(n - 1)} ${H - padBot} L ${X(0)} ${H - padBot} Z`;
+    } else {
+      for (let i = 0; i < n; i++) {
+        const x = X(i), seg = `M ${x} ${Y(v.h[i])} L ${x} ${Y(v.l[i])} M ${x - tick} ${Y(v.o[i])} L ${x} ${Y(v.o[i])} M ${x} ${Y(v.c[i])} L ${x + tick} ${Y(v.c[i])} `;
+        if (v.c[i] >= v.o[i]) upP += seg; else dnP += seg;
+      }
+    }
+  }
+  const emaPath = (arr) => {
+    let d = '', started = false;
+    for (let i = 0; i < n; i++) { const yv = arr[i]; if (yv == null) { started = false; continue; } d += (started ? ' L' : ' M') + ` ${X(i)} ${Y(yv)}`; started = true; }
+    return d;
+  };
+
+  return (
+    <View>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 8 }}>
+        <View>
+          <Text style={{ color: C.faint, fontSize: 10.5, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' }}>
+            {idx == null ? (v.isIntraday ? 'Last · 5-min' : 'Close') : fmtLabel(v.labels[active], v.isIntraday)}
+          </Text>
+          <Text style={[TNUM, { color: C.text, fontSize: 26, fontWeight: '800', letterSpacing: -0.5 }]}>
+            ${price != null ? price.toFixed(2) : '—'}
+          </Text>
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={[TNUM, { color: chg >= 0 ? C.gain : C.loss, fontSize: 18, fontWeight: '800' }]}>{E.signPct(chg, 2)}</Text>
+          <Text style={{ color: C.faint, fontSize: 10.5 }}>{ctx}</Text>
+          {idx != null && type === 'ohlc' ? (
+            <Text style={[TNUM, { color: C.muted, fontSize: 10, marginTop: 2 }]}>
+              O {v.o[active].toFixed(2)} · H {v.h[active].toFixed(2)} · L {v.l[active].toFixed(2)}
+            </Text>
+          ) : null}
+        </View>
+      </View>
+
+      <View onLayout={(e) => setW(e.nativeEvent.layout.width)}
+        onStartShouldSetResponder={() => true} onMoveShouldSetResponder={() => true}
+        onResponderGrant={onTouch} onResponderMove={onTouch} onResponderRelease={() => setIdx(null)}>
+        {w > 0 ? (
+          <Svg width={w} height={H}>
+            <Defs>
+              <LinearGradient id="mg" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0" stopColor={col} stopOpacity="0.24" />
+                <Stop offset="1" stopColor={col} stopOpacity="0" />
+              </LinearGradient>
+            </Defs>
+            {v.isIntraday ? (
+              <Line x1={padX} y1={Y(v.baseline)} x2={w - padX} y2={Y(v.baseline)}
+                stroke={C.muted} strokeOpacity="0.5" strokeWidth="1" strokeDasharray="3,4" />
+            ) : null}
+            {type === 'line' ? <Path d={area} fill="url(#mg)" /> : null}
+            {type === 'line' ? <Path d={line} stroke={col} strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" /> : null}
+            {type === 'ohlc' ? <Path d={upP} stroke={C.gain} strokeWidth="1.5" fill="none" /> : null}
+            {type === 'ohlc' ? <Path d={dnP} stroke={C.loss} strokeWidth="1.5" fill="none" /> : null}
+            {ema1 ? <Path d={emaPath(ema1)} stroke={EMA_COLORS[0]} strokeWidth="1.6" fill="none" strokeOpacity="0.95" /> : null}
+            {ema2 ? <Path d={emaPath(ema2)} stroke={EMA_COLORS[1]} strokeWidth="1.6" fill="none" strokeOpacity="0.95" /> : null}
+            <SvgText x={padX} y={H - 5} fontSize="9" fontWeight="600" fill={C.faint} textAnchor="start">{fmtLabel(v.labels[0], v.isIntraday)}</SvgText>
+            <SvgText x={w - padX} y={H - 5} fontSize="9" fontWeight="600" fill={C.faint} textAnchor="end">{fmtLabel(v.labels[n - 1], v.isIntraday)}</SvgText>
+            {idx != null ? <Line x1={X(active)} y1={padTop - 6} x2={X(active)} y2={H - padBot} stroke={C.text} strokeOpacity="0.4" strokeWidth="1" /> : null}
+            {idx != null && type === 'line' ? <Circle cx={X(active)} cy={Y(price)} r="4.5" fill={col} stroke={C.surface} strokeWidth="2" /> : null}
+          </Svg>
+        ) : <View style={{ height: H }} />}
+      </View>
+
+      <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginTop: 8 }}>
+        {daily && ema1On ? <Legend C={C} color={EMA_COLORS[0]} text={`EMA ${ema1P}`} /> : null}
+        {daily && ema2On ? <Legend C={C} color={EMA_COLORS[1]} text={`EMA ${ema2P}`} /> : null}
+        <Text style={{ color: C.faint, fontSize: 11 }}>
+          {v.isIntraday ? '5-min bars · dashed = prev close · touch to inspect' : 'touch & drag to inspect'}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function Legend({ C, color, text }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+      <View style={{ width: 14, height: 3, borderRadius: 2, backgroundColor: color }} />
+      <Text style={[TNUM, { color: C.muted, fontSize: 11 }]}>{text}</Text>
+    </View>
+  );
+}
+
+// generic equal-width segmented control
+function SegBar({ C, options, value, onChange }) {
+  return (
+    <View style={[styles.modeSeg, { backgroundColor: C.surface2, borderColor: C.line }]}>
+      {options.map(o => {
+        const on = o.key === value;
+        return (
+          <Pressable key={o.key} onPress={() => onChange(o.key)} accessibilityRole="button"
+            accessibilityState={{ selected: on }} style={[styles.modeBtn, on && { backgroundColor: C.accent }]}>
+            <Text style={{ color: on ? C.accentInk : C.muted, fontSize: 13.5, fontWeight: '700' }}>{o.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+// today's session change + closes for a macro symbol
+function macroDay(ser) {
+  const it = ser.intraday, n = it.t.length, day = it.t[n - 1].slice(0, 10);
+  let s = n - 1;
+  while (s > 0 && it.t[s - 1].slice(0, 10) === day) s--;
+  const dd = ser.daily.d; let prev = null;
+  for (let i = dd.length - 1; i >= 0; i--) { if (dd[i] < day) { prev = ser.daily.c[i]; break; } }
+  const closes = it.c.slice(s), last = closes[closes.length - 1], base = prev != null ? prev : it.o[s];
+  return { last, chg: last / base - 1, closes };
+}
+
+function Spark({ C, vals, up, w = 74, h = 30 }) {
+  if (!vals || vals.length < 2 || !w) return <View style={{ width: w, height: h }} />;
+  const lo = Math.min(...vals), hi = Math.max(...vals), rng = (hi - lo) || 1;
+  const X = (i) => (i / (vals.length - 1)) * w;
+  const Y = (v) => 2 + (1 - (v - lo) / rng) * (h - 4);
+  let d = `M ${X(0)} ${Y(vals[0])}`;
+  for (let i = 1; i < vals.length; i++) d += ` L ${X(i)} ${Y(vals[i])}`;
+  return <Svg width={w} height={h}><Path d={d} stroke={up ? C.gain : C.loss} strokeWidth="1.6" fill="none" strokeLinejoin="round" /></Svg>;
+}
+
+function MacroTile({ C, meta, ser, selected, onPress }) {
+  const day = macroDay(ser);
+  const up = day.chg >= 0;
+  return (
+    <Pressable onPress={onPress} accessibilityLabel={`${meta.symbol} ${meta.label}`}
+      style={[styles.tile, { backgroundColor: C.surface, borderColor: selected ? C.accent : 'transparent', borderWidth: selected ? 1.5 : StyleSheet.hairlineWidth }]}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[styles.tick, { color: C.text, fontSize: 16 }]}>{meta.symbol}</Text>
+          <Text numberOfLines={1} style={{ color: C.faint, fontSize: 10.5, marginTop: 1 }}>{meta.label}</Text>
+        </View>
+        <Spark C={C} vals={day.closes} up={up} />
+      </View>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 8 }}>
+        <Text style={[TNUM, { color: C.text, fontSize: 15, fontWeight: '800' }]}>{day.last != null ? day.last.toFixed(2) : '—'}</Text>
+        <Text style={[TNUM, { color: up ? C.gain : C.loss, fontSize: 13, fontWeight: '800' }]}>{E.signPct(day.chg, 2)}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function Macro({ C, snap, st, persist, refreshing, onRefresh }) {
+  const macro = snap.macro;
+  const setP = (patch) => { haptic('select'); persist({ ...st, ...patch }); };
+  if (!macro || !macro.symbols || !macro.symbols.length) {
+    return (
+      <View style={{ alignItems: 'center', paddingVertical: 60, paddingHorizontal: 24 }}>
+        <Text style={{ fontSize: 38, color: C.muted, marginBottom: 10 }}>∿</Text>
+        <Text style={{ color: C.text, fontSize: 16, fontWeight: '700', marginBottom: 6 }}>No macro data yet</Text>
+        <Text style={{ color: C.muted, fontSize: 13.5, textAlign: 'center', lineHeight: 20 }}>
+          Pull to refresh once the snapshot includes the intraday macro layer.
+        </Text>
+      </View>
+    );
+  }
+  const syms = macro.symbols;
+  const cur = syms.find(s => s.symbol === st.macroSym) ? st.macroSym : syms[0].symbol;
+  const meta = syms.find(s => s.symbol === cur);
+  const ser = macro.series[cur];
+
+  return (
+    <ScrollView contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 96 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} />}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', paddingTop: 8, paddingBottom: 4, paddingHorizontal: 2 }}>
+        <Text style={{ color: C.text, fontSize: 30, fontWeight: '900', letterSpacing: -0.6 }}>Markets</Text>
+        <Text style={{ color: C.faint, fontSize: 11 }}>intraday · 5-min</Text>
+      </View>
+
+      <View style={styles.tileGrid}>
+        {syms.map(s => (
+          <MacroTile key={s.symbol} C={C} meta={s} ser={macro.series[s.symbol]}
+            selected={s.symbol === cur} onPress={() => setP({ macroSym: s.symbol })} />
+        ))}
+      </View>
+
+      <View style={[styles.cardPanel, { backgroundColor: C.surface, padding: 16, marginTop: 2 }]}>
+        <View style={{ marginBottom: 10 }}>
+          <Text style={{ color: C.text, fontSize: 18, fontWeight: '800' }}>{meta.symbol} · {meta.label}</Text>
+          <Text style={{ color: C.faint, fontSize: 12, marginTop: 1 }}>{meta.desc}</Text>
+        </View>
+        <MacroChart C={C} ser={ser} tf={st.macroTf} type={st.macroType}
+          ema1On={st.ema1On} ema1P={st.ema1P} ema2On={st.ema2On} ema2P={st.ema2P} />
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
+          <View style={{ flex: 1 }}>
+            <SegBar C={C} value={st.macroTf} onChange={(k) => setP({ macroTf: k })}
+              options={MACRO_TFS.map(t => ({ key: t, label: t }))} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <SegBar C={C} value={st.macroType} onChange={(k) => setP({ macroType: k })} options={CHART_TYPES} />
+          </View>
+        </View>
+
+        {st.macroTf === '1D' ? (
+          <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 12 }}>Moving averages show on the 6M · 1Y daily views.</Text>
+        ) : (
+          <View style={{ marginTop: 6 }}>
+            <EmaRow C={C} color={EMA_COLORS[0]} on={st.ema1On} period={st.ema1P}
+              onToggle={(v) => setP({ ema1On: v })} onSet={(p) => setP({ ema1P: p })} border />
+            <EmaRow C={C} color={EMA_COLORS[1]} on={st.ema2On} period={st.ema2P}
+              onToggle={(v) => setP({ ema2On: v })} onSet={(p) => setP({ ema2P: p })} border />
+          </View>
+        )}
+      </View>
+    </ScrollView>
+  );
+}
+
+// EMA control: colored swatch + on/off + period stepper (clamped 2–400)
+function EmaRow({ C, color, on, period, onToggle, onSet, border }) {
+  const clamp = (p) => Math.max(2, Math.min(400, p));
+  return (
+    <View style={[styles.ctlRow, border && { borderTopColor: C.line, borderTopWidth: 1 }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+        <View style={{ width: 16, height: 3, borderRadius: 2, backgroundColor: on ? color : C.faint }} />
+        <Text style={{ color: C.text, fontSize: 13.5 }}>EMA</Text>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <View style={[styles.stepper, { backgroundColor: C.surface2, borderColor: C.line, opacity: on ? 1 : 0.4 }]}>
+          <Pressable disabled={!on} onPress={() => onSet(clamp(period - 5))} style={styles.stepBtn} hitSlop={6}>
+            <Text style={{ color: C.accent, fontSize: 22, fontWeight: '600' }}>−</Text></Pressable>
+          <Text style={[TNUM, { color: C.text, fontSize: 15, fontWeight: '700', minWidth: 40, textAlign: 'center' }]}>{period}</Text>
+          <Pressable disabled={!on} onPress={() => onSet(clamp(period + 5))} style={styles.stepBtn} hitSlop={6}>
+            <Text style={{ color: C.accent, fontSize: 20, fontWeight: '600' }}>+</Text></Pressable>
+        </View>
+        <Switch value={on} onValueChange={onToggle}
+          trackColor={{ false: C.surface2, true: C.accent }} thumbColor="#fff" ios_backgroundColor={C.surface2} />
+      </View>
+    </View>
+  );
+}
+
 /* ====================== shared UI ====================== */
 function AppHeader({ C, snap }) {
   const when = (snap.generatedAt || '').replace('T', ' ').replace('Z', ' UTC');
@@ -1040,7 +1387,7 @@ function TabBar({ C, tab, setTab, count, insets }) {
   const go = (t) => { haptic('light'); setTab(t); };
   return (
     <View style={[styles.tabbar, { backgroundColor: C.ground, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.line, paddingBottom: Math.max(insets.bottom, 8) }]}>
-      {[['screener', '▚', 'Screener'], ['portfolio', '◈', 'Portfolio']].map(([id, ic, label]) => {
+      {[['screener', '▚', 'Screener'], ['portfolio', '◈', 'Portfolio'], ['macro', '∿', 'Markets']].map(([id, ic, label]) => {
         const on = tab === id;
         return (
           <Pressable key={id} style={styles.tabBtn} onPress={() => go(id)}>
@@ -1201,6 +1548,9 @@ const styles = StyleSheet.create({
   search: { borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, marginTop: 12 },
   countLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 6, paddingBottom: 8, paddingTop: 6 },
   miniBtn: { paddingHorizontal: 13, paddingVertical: 8, borderRadius: 18 },
+  resetBtn: { paddingHorizontal: 11, paddingVertical: 5, borderRadius: 14, borderWidth: 1 },
+  tileGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8, marginBottom: 14 },
+  tile: { width: '47.8%', flexGrow: 1, borderRadius: 18, padding: 13 },
   card: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 15, paddingHorizontal: 10, borderRadius: 14 },
   cardTap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, minWidth: 0 },
   rank: { width: 24, textAlign: 'center', fontSize: 13, fontWeight: '700', ...TNUM },

@@ -1,5 +1,12 @@
 import React from 'react';
-const mk=name=>({children,...p})=>React.createElement('div',{'data-svg':name},children);
-export const Path=mk('path'),Defs=mk('defs'),LinearGradient=mk('lg'),Stop=mk('stop'),Rect=mk('rect'),G=mk('g'),Circle=mk('circle'),Line=mk('line'),Text=mk('text');
-const Svg=({children,style})=>React.createElement('div',{style:{...style,minHeight:70},'data-svg':'svg'},children);
+// Test-harness stub: map react-native-svg primitives to real DOM SVG elements so
+// the headless renderer actually draws charts (props pass straight through; React
+// handles the SVG namespace + camelCase→dashed attribute mapping).
+const pass = (tag) => ({ children, ...p }) => React.createElement(tag, p, children);
+export const Path = pass('path'), Defs = pass('defs'), Stop = pass('stop'),
+  Rect = pass('rect'), G = pass('g'), Circle = pass('circle'), Line = pass('line'),
+  Text = pass('text');
+export const LinearGradient = ({ children, ...p }) => React.createElement('linearGradient', p, children);
+const Svg = ({ children, width, height, style }) =>
+  React.createElement('svg', { width, height, style }, children);
 export default Svg;
