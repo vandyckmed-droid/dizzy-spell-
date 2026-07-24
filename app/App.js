@@ -419,17 +419,22 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
     q ? ranked.filter(o => o.t.symbol.includes(q) || o.t.name.toUpperCase().includes(q)) : ranked,
     [ranked, q]);
 
-  // 0–100 normalization: min/max of the ranked score across the whole universe
-  // (post-filter, pre-search), so 100 = the top score, 0 = the bottom.
-  const scoreExtent = useMemo(() => {
-    let mn = Infinity, mx = -Infinity;
-    for (const o of ranked) {
-      const s = o.score;
-      if (s != null && !Number.isNaN(s)) { if (s < mn) mn = s; if (s > mx) mx = s; }
-    }
-    return mx >= mn ? { mn, mx } : null;
-  }, [ranked]);
-  const norm = st.scoreNorm ? scoreExtent : null;
+  // 0–100 normalization: a logistic curve calibrated to the universe's own score
+  // distribution — the median name lands at 50, and the scale is set from the
+  // deciles so the 90th-percentile score maps to 90 and the 10th to 10 (top and
+  // bottom deciles then occupy 90–100 / 0–10). Asymmetric scale handles skew.
+  const norm = useMemo(() => {
+    if (!st.scoreNorm) return null;
+    const xs = [];
+    for (const o of ranked) if (o.score != null && !Number.isNaN(o.score)) xs.push(o.score);
+    if (xs.length < 3) return null;
+    xs.sort((a, b) => a - b);
+    const q = (p) => { const i = (xs.length - 1) * p, lo = Math.floor(i), hi = Math.ceil(i); return xs[lo] + (xs[hi] - xs[lo]) * (i - lo); };
+    const med = q(0.5), p10 = q(0.1), p90 = q(0.9);
+    const K = Math.log(9);                       // decile boundary → 90 / 10
+    const up = p90 - med, dn = med - p10;
+    return { med, sUp: up > 1e-9 ? up / K : null, sDown: dn > 1e-9 ? dn / K : null };
+  }, [st.scoreNorm, ranked]);
 
   const selSet = new Set(st.selected);
   const selInView = ranked.reduce((n, o) => n + (selSet.has(o.t.symbol) ? 1 : 0), 0);
@@ -539,7 +544,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
               onDec={() => setVol({ volEnd: st.volEnd - 1 })} onInc={() => setVol({ volEnd: st.volEnd + 1 })} />
           </>
         ) : null}
-        <ToggleRow C={C} border label="Normalized 0–100 score" sub="100 = top of the universe, 0 = bottom"
+        <ToggleRow C={C} border label="Normalized 0–100 score" sub="sigmoid vs the universe · median = 50, deciles at 10 / 90"
           value={st.scoreNorm} onChange={(v) => { animateNext(); haptic('select'); persist({ ...st, scoreNorm: v }); }} />
         <ScoreNote C={C} snap={snap} st={st} />
       </Card>
@@ -719,7 +724,13 @@ function RankCard({ C, o, mode, removeMkt, selected, corr, active, divRho, redRh
   let right;
   if (norm) {
     const has = o.score != null && !Number.isNaN(o.score);
-    const n100 = has && norm.mx > norm.mn ? Math.round(100 * (o.score - norm.mn) / (norm.mx - norm.mn)) : (has ? 100 : null);
+    let n100 = null;
+    if (has) {
+      const d = o.score - norm.med;
+      const s = d >= 0 ? norm.sUp : norm.sDown;              // asymmetric half-scales
+      const z = s ? d / s : (d === 0 ? 0 : d * 1e6);         // degenerate side → saturate
+      n100 = Math.max(0, Math.min(100, Math.round(100 / (1 + Math.exp(-z)))));
+    }
     right = (
       <View style={{ alignItems: 'flex-end', minWidth: 84 }}>
         <Text style={[styles.big, { color: C.text }]}>{n100 == null ? '—' : n100}</Text>
