@@ -238,7 +238,7 @@ function Root() {
       </Animated.View>
       <TabBar C={C} tab={tab} setTab={setTab} count={st.selected.length} insets={insets} />
       <Modal visible={!!detail} animationType="slide" onRequestClose={() => setDetail(null)} presentationStyle="fullScreen">
-        {detail && <Detail C={C} snap={snap} market={market} st={st} sym={detail}
+        {detail && <Detail C={C} snap={snap} market={market} st={st} sym={detail} persist={persist}
           onClose={() => setDetail(null)} onToggle={(s) => persist(toggleSel(st, s))} onOpen={setDetail}
           onSector={(uid) => { animateNext(); persist({ ...st, universe: uid }); setDetail(null); setTab('screener'); }} />}
       </Modal>
@@ -1430,9 +1430,10 @@ function portfolioGuidance(snap, BYSYM, st, market, pf) {
 }
 
 /* ====================== Ticker detail ====================== */
-function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen, onSector }) {
+function Detail({ C, snap, market, st, sym, persist, onClose, onToggle, onOpen, onSector }) {
   const t = snap.tickers.find(x => x.symbol === sym);
   const insets = useSafeAreaInsets();
+  const setP = (patch) => { animateNext(); haptic('select'); persist({ ...st, ...patch }); };
   const peers = useMemo(() =>
     t ? topCorrelated(t, snap.tickers, st.asof, 3) : [],
     [snap, t, st.asof]);
@@ -1494,6 +1495,31 @@ function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen, onSector 
 
         <View style={{ marginHorizontal: 16, marginBottom: 14 }}>
           <ScrubChart C={C} snap={snap} ticker={t} st={st} />
+        </View>
+
+        <View style={{ marginHorizontal: 16, marginBottom: 14 }}>
+          <Card C={C}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+              <Eyebrow C={C}>Moving averages</Eyebrow>
+              {(() => {
+                const isDef = st.ema1P === 50 && st.ema2P === 200 && st.ema1On && st.ema2On;
+                return (
+                  <Pressable disabled={isDef} accessibilityLabel="Reset EMAs to 50 / 200"
+                    onPress={() => { haptic('select'); setP({ ema1P: 50, ema2P: 200, ema1On: true, ema2On: true }); }}
+                    style={[styles.resetBtn, { borderColor: isDef ? C.line : C.accent, opacity: isDef ? 0.4 : 1 }]}>
+                    <Text style={{ color: isDef ? C.faint : C.accent, fontSize: 11.5, fontWeight: '800' }}>↺ 50 / 200</Text>
+                  </Pressable>
+                );
+              })()}
+            </View>
+            <EmaRow C={C} color={EMA_COLORS[0]} on={st.ema1On} period={st.ema1P}
+              onToggle={(v) => setP({ ema1On: v })} onSet={(p) => setP({ ema1P: p })} border />
+            <EmaRow C={C} color={EMA_COLORS[1]} on={st.ema2On} period={st.ema2P}
+              onToggle={(v) => setP({ ema2On: v })} onSet={(p) => setP({ ema2P: p })} border />
+            <ToggleRow C={C} border label="Golden / death cross"
+              sub={st.ema1On && st.ema2On ? 'bi-color fast EMA + shaded fill + glow markers' : 'needs both EMAs on'}
+              value={st.maCross} onChange={(v) => setP({ maCross: v })} />
+          </Card>
         </View>
 
         <View style={{ marginHorizontal: 16 }}>
@@ -1566,7 +1592,17 @@ function ScrubChart({ C, snap, ticker, st }) {
   const winLo = Math.max(0, Math.min(n - 1, (st.asof - st.start) - start0));
   const winHi = Math.max(0, Math.min(n - 1, (st.asof - st.end) - start0));
 
-  const lo = Math.min(...series), hi = Math.max(...series), rng = (hi - lo) || 1;
+  // EMA overlays (same settings as the Markets chart): a bi-colored fast EMA
+  // (green above the slow, red below) with a translucent regime fill, a base
+  // regime strip, and soft round glow markers at each golden/death cross.
+  const ema1 = st.ema1On ? emaSeries(series, st.ema1P) : null;
+  const ema2 = st.ema2On ? emaSeries(series, st.ema2P) : null;
+  const crossFx = st.maCross && ema1 && ema2;
+
+  let lo = Math.min(...series), hi = Math.max(...series);
+  const bumpArr = (a) => { if (a) for (const x of a) if (x != null) { if (x < lo) lo = x; if (x > hi) hi = x; } };
+  bumpArr(ema1); bumpArr(ema2);
+  const rng = (hi - lo) || 1;
   const X = (i) => padX + (n <= 1 ? 0 : (i / (n - 1)) * (w - 2 * padX));
   const Y = (v) => padTop + (1 - (v - lo) / rng) * (H - padTop - padBot);
 
@@ -1591,6 +1627,30 @@ function ScrubChart({ C, snap, ticker, st }) {
     for (let i = 1; i < n; i++) line += ` L ${X(i)} ${Y(series[i])}`;
     area = line + ` L ${X(n - 1)} ${H - padBot} L ${X(0)} ${H - padBot} Z`;
   }
+
+  // golden/death-cross geometry (mirrors the Markets chart)
+  let bull = '', bear = '', fillUp = '', fillDown = '', fastUp = '', fastDown = '';
+  const crosses = [];
+  const yRib = H - padBot + 6;
+  let regimeUp = null;
+  if (crossFx && w > 0 && n > 1) {
+    for (let i = 0; i < n; i++) {
+      const a = ema1[i], b = ema2[i];
+      if (a == null || b == null) continue;
+      const upNow = a >= b; regimeUp = upNow;
+      const x1 = X(Math.max(0, i - 0.5)), x2 = X(Math.min(n - 1, i + 0.5));
+      const rib = `M ${x1} ${yRib} L ${x2} ${yRib} `;
+      if (upNow) bull += rib; else bear += rib;
+      const a0 = ema1[i - 1], b0 = ema2[i - 1];
+      if (i > 0 && a0 != null && b0 != null) {
+        const quad = `M ${X(i - 1)} ${Y(a0)} L ${X(i)} ${Y(a)} L ${X(i)} ${Y(b)} L ${X(i - 1)} ${Y(b0)} Z `;
+        const fseg = `M ${X(i - 1)} ${Y(a0)} L ${X(i)} ${Y(a)} `;
+        if (upNow) { fillUp += quad; fastUp += fseg; } else { fillDown += quad; fastDown += fseg; }
+        if ((a0 >= b0) !== upNow) crosses.push({ x: X(i), y: Y(a), golden: upNow });
+      }
+    }
+  }
+  const emaPath = (arr) => { let d = '', started = false; for (let i = 0; i < n; i++) { const yv = arr[i]; if (yv == null) { started = false; continue; } d += (started ? ' L' : ' M') + ` ${X(i)} ${Y(yv)}`; started = true; } return d; };
 
   return (
     <View style={[styles.cardPanel, { backgroundColor: C.surface, padding: 16 }]}>
@@ -1619,10 +1679,27 @@ function ScrubChart({ C, snap, ticker, st }) {
                 <Stop offset="0" stopColor={col} stopOpacity="0.26" />
                 <Stop offset="1" stopColor={col} stopOpacity="0" />
               </LinearGradient>
+              <RadialGradient id="dglowUp" cx="50%" cy="50%" r="50%">
+                <Stop offset="0" stopColor={C.gain} stopOpacity="0.8" />
+                <Stop offset="0.45" stopColor={C.gain} stopOpacity="0.32" />
+                <Stop offset="1" stopColor={C.gain} stopOpacity="0" />
+              </RadialGradient>
+              <RadialGradient id="dglowDn" cx="50%" cy="50%" r="50%">
+                <Stop offset="0" stopColor={C.loss} stopOpacity="0.8" />
+                <Stop offset="0.45" stopColor={C.loss} stopOpacity="0.32" />
+                <Stop offset="1" stopColor={C.loss} stopOpacity="0" />
+              </RadialGradient>
             </Defs>
-            {winHi > winLo ? (
+            {/* ranking window: a filled box on its own; subtle boundary lines when EMAs shade the chart */}
+            {winHi > winLo && !crossFx ? (
               <Rect x={X(winLo)} y={padTop - 4} width={Math.max(1, X(winHi) - X(winLo))} height={H - padTop - padBot + 8}
                 fill={C.accentSoft} stroke={C.accent} strokeOpacity="0.35" strokeWidth="1" rx="3" />
+            ) : null}
+            {winHi > winLo && crossFx ? (
+              <>
+                <Line x1={X(winLo)} y1={padTop - 4} x2={X(winLo)} y2={H - padBot} stroke={C.accent} strokeOpacity="0.5" strokeWidth="1" strokeDasharray="2,4" />
+                <Line x1={X(winHi)} y1={padTop - 4} x2={X(winHi)} y2={H - padBot} stroke={C.accent} strokeOpacity="0.5" strokeWidth="1" strokeDasharray="2,4" />
+              </>
             ) : null}
             {winHi > winLo ? (
               <SvgText x={X(winLo) + 2} y={H - 3} fontSize="9" fontWeight="600" fill={C.accent} textAnchor="start">{shortDate(dates[winLo])}</SvgText>
@@ -1630,8 +1707,26 @@ function ScrubChart({ C, snap, ticker, st }) {
             {winHi > winLo ? (
               <SvgText x={X(winHi) - 2} y={H - 3} fontSize="9" fontWeight="600" fill={C.accent} textAnchor="end">{shortDate(dates[winHi])}</SvgText>
             ) : null}
-            <Path d={area} fill="url(#cg)" />
-            <Path d={line} stroke={col} strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" />
+            {/* regime fill between the EMAs */}
+            {crossFx ? <Path d={fillUp} fill={C.gain} fillOpacity="0.16" stroke="none" /> : null}
+            {crossFx ? <Path d={fillDown} fill={C.loss} fillOpacity="0.16" stroke="none" /> : null}
+            {/* price: area only when the regime fill isn't already shading the chart */}
+            {!crossFx ? <Path d={area} fill="url(#cg)" /> : null}
+            <Path d={line} stroke={col} strokeWidth="2.2" fill="none" strokeLinejoin="round" strokeLinecap="round" />
+            {/* base regime strip */}
+            {crossFx ? <Path d={bull} stroke={C.gain} strokeWidth="3" fill="none" strokeOpacity="0.9" strokeLinecap="round" /> : null}
+            {crossFx ? <Path d={bear} stroke={C.loss} strokeWidth="3" fill="none" strokeOpacity="0.9" strokeLinecap="round" /> : null}
+            {/* slow EMA (steady) + fast EMA (bi-color when the cross effect is on, else plain) */}
+            {ema2 ? <Path d={emaPath(ema2)} stroke={EMA_COLORS[1]} strokeWidth="1.5" fill="none" strokeOpacity="0.95" /> : null}
+            {crossFx ? <Path d={fastUp} stroke={C.gain} strokeWidth="2" fill="none" strokeLinejoin="round" strokeLinecap="round" /> : null}
+            {crossFx ? <Path d={fastDown} stroke={C.loss} strokeWidth="2" fill="none" strokeLinejoin="round" strokeLinecap="round" /> : null}
+            {ema1 && !crossFx ? <Path d={emaPath(ema1)} stroke={EMA_COLORS[0]} strokeWidth="1.5" fill="none" strokeOpacity="0.95" /> : null}
+            {crossFx ? crosses.map((cr, i) => (
+              <React.Fragment key={i}>
+                <Circle cx={cr.x} cy={cr.y} r="10" fill={cr.golden ? 'url(#dglowUp)' : 'url(#dglowDn)'} />
+                <Circle cx={cr.x} cy={cr.y} r="2.4" fill={cr.golden ? C.gain : C.loss} fillOpacity="0.92" />
+              </React.Fragment>
+            )) : null}
             {idx != null ? (
               <Line x1={X(active)} y1={padTop - 4} x2={X(active)} y2={H - padBot} stroke={C.text} strokeOpacity="0.4" strokeWidth="1" />
             ) : null}
@@ -1641,9 +1736,19 @@ function ScrubChart({ C, snap, ticker, st }) {
           </Svg>
         ) : <View style={{ height: H }} />}
       </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
-        <View style={{ width: 12, height: 8, borderRadius: 2, backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.accent }} />
-        <Text style={{ color: C.faint, fontSize: 11 }}>Shaded = ranking window · touch & drag to inspect</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginTop: 8 }}>
+        {st.ema1On ? <Legend C={C} color={crossFx ? (regimeUp ? C.gain : C.loss) : EMA_COLORS[0]} text={`EMA ${st.ema1P}`} /> : null}
+        {st.ema2On ? <Legend C={C} color={EMA_COLORS[1]} text={`EMA ${st.ema2P}`} /> : null}
+        {crossFx ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: regimeUp ? C.gain : C.loss, opacity: 0.9 }} />
+            <Text style={{ color: C.faint, fontSize: 11 }}>{regimeUp ? 'golden' : 'death'} cross</Text>
+          </View>
+        ) : null}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+          <View style={{ width: 12, height: 0, borderTopWidth: 1, borderColor: C.accent, borderStyle: 'dashed' }} />
+          <Text style={{ color: C.faint, fontSize: 11 }}>ranking window · touch to inspect</Text>
+        </View>
       </View>
     </View>
   );
