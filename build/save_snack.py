@@ -22,7 +22,16 @@ DEPS = {
 REPO = "vandyckmed-droid/dizzy-spell-"
 INLINE = "--inline" in sys.argv
 
-branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"]).decode().strip()
+# External refs resolve against a PERMANENT public branch so the link never dies
+# when a feature branch is deleted after merge. This matches DATA_URL in App.js,
+# which already hydrates the full snapshot from `main`. Override with --branch=NAME
+# (e.g. to preview an unmerged branch's app files) or --branch to use the checkout.
+branch = "main"
+for a in sys.argv:
+    if a == "--branch":
+        branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"]).decode().strip()
+    elif a.startswith("--branch="):
+        branch = a.split("=", 1)[1]
 RAW = f"https://raw.githubusercontent.com/{REPO}/refs/heads/{branch}"
 
 # in-Snack filename -> repo path

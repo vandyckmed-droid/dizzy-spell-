@@ -73,15 +73,16 @@ uses the **stable** API:
 | `/stable/profile` | Company name, sector, industry, market cap, exchange, eligibility flags |
 | `/stable/historical-price-eod/dividend-adjusted` | Split + dividend adjusted closes (`adjClose`) |
 
-The current snapshot holds **520 trading days** for **377 eligible tickers**
-(~1.3 MB), which covers the default 252-day ranking lookback with room to slide
-the as-of date, the 252-day HRP risk window, and the 1-year detail return.
+The current snapshot holds **800 trading days** for **600 eligible tickers**
+(~3.2 MB), which covers the default 250-day ranking lookback with room to slide
+the as-of date, the 252-day HRP risk window, the 756-day residual-momentum beta
+window, and the 1-year detail return.
 
-## Universe — US Top 500
+## Universe — US Top 600
 
 `build/fetch_data.py` builds the universe, kept separate from all ranking and
 portfolio logic: it pulls ~2,100 candidates (≥ $2B) across NYSE / Nasdaq / AMEX,
-cleans them, and retains the **largest 500 eligible companies** by market cap.
+cleans them, and retains the **largest 600 eligible companies** by market cap.
 
 - Actively traded common stocks; **ADRs and foreign listings allowed** (TSM, ARM, BABA, HSBC, …).
 - Excludes ETFs, funds, non-common share classes (warrants/rights/units/preferreds
@@ -90,7 +91,7 @@ cleans them, and retains the **largest 500 eligible companies** by market cap.
 - Deduplicates share classes by issuer CIK, keeping the **most liquid** class
   (BRK-B over BRK-A, GOOGL over GOOG). Every drop is recorded in `snapshot.exclusions`.
 
-The Top 500 pool also carries **per-sector sub-universes** (Technology, Financials,
+The Top 600 pool also carries **per-sector sub-universes** (Technology, Financials,
 Healthcare, …) as tags — the horizontal pill selector switches between them with no
 extra data. To use fixed constituent lists or different rules instead, edit the
 screener query in `discover_candidates()`.
@@ -108,7 +109,8 @@ keeping the largest listing). Every drop is logged with its reason in
 ## The math
 
 **Sharpe momentum** — simple daily returns from adjusted closes over the window
-`[as_of − start_offset … as_of − end_offset]` (default 252 → 21, ≈ 231 returns):
+`[as_of − start_offset … as_of − end_offset]` (default 250 → 20 — a rounded 12–1
+window, ≈ 230 returns):
 
 ```
 annualized return     = mean(r) × 252
@@ -157,12 +159,12 @@ The FMP key never appears in the snapshot, the artifact, or the Snack.
 ```bash
 python3 build/reference_numerics.py  # NumPy reference: formulas, HRP, constraints
 python3 build/dump_expected.py       # dump reference outputs
-node    build/validate_js.mjs        # shipped JS == Python reference (109 checks)
-node    build/verify_edge.mjs        # boundaries, HRP stability, exact 100%, perf (1058 checks)
+node    build/validate_js.mjs        # shipped JS == Python reference (1051 checks)
+node    build/verify_edge.mjs        # boundaries, HRP stability, exact 100%, perf (1317 checks)
 node    build/smoke_test.mjs         # headless iPhone render + screenshots
 ```
 
 The JS numerics that ship in the artifact are extracted verbatim from
 `build/template.html` and cross-checked against the NumPy reference, so the two
-implementations cannot drift. Performance: ranking a 500-ticker universe takes
-~3 ms per pass and HRP on 50 names ~15 ms.
+implementations cannot drift. Performance: ranking the 600-ticker universe takes
+a few ms per pass and HRP on 50 names ~5 ms.
