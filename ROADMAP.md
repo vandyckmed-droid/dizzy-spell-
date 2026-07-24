@@ -69,9 +69,11 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 - 🟡 **Markets tab** — 2×2 tiles (last · day change · session sparkline) for SPY / TLT / XLE / GLD.
 - 🟡 **Rich chart** — timeframe **1D (5-min) · 6M · 1Y**, chart type **Line / OHLC bars**, crosshair
   scrub, prev-close reference on 1D.
-- 🟢 **Configurable EMAs** — EMA-50 / EMA-200 on the daily views (on/off + adjustable period).
-- 🟢 **Golden / death cross effect** — regime ribbon (green fast>slow, red fast<slow) + diamond
-  markers at each crossover; toggleable.
+- 🟢 **Configurable EMAs** — EMA-50 / EMA-200 on the daily views (on/off + period in **steps of 5**,
+  with a **↺ 50 / 200 reset**).
+- 🟢 **Golden / death cross effect** — the **fast EMA is bi-colored** (green above the slow EMA, red
+  below) with a matching **translucent fill** between the two lines, a thin base regime strip, and a
+  **soft round glow** at each crossover; toggleable.
 - 🟢 Seven macro symbols across assets — **SPY · TLT · HYG · XLE · GLD · UUP · VIX** (equities,
   rates, credit, energy, metals, dollar, volatility).
 

@@ -7,6 +7,7 @@ export const Path = pass('path'), Defs = pass('defs'), Stop = pass('stop'),
   Rect = pass('rect'), G = pass('g'), Circle = pass('circle'), Line = pass('line'),
   Text = pass('text');
 export const LinearGradient = ({ children, ...p }) => React.createElement('linearGradient', p, children);
+export const RadialGradient = ({ children, ...p }) => React.createElement('radialGradient', p, children);
 const Svg = ({ children, width, height, style }) =>
   React.createElement('svg', { width, height, style }, children);
 export default Svg;
