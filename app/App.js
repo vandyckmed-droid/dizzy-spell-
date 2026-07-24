@@ -116,12 +116,6 @@ function marketReturns(snap) {
   }
   return mret;
 }
-const CAP_BANDS = [
-  { key: 'all', label: 'All caps', test: () => true },
-  { key: 'mega', label: '≥ $500B', test: mc => mc >= 500e9 },
-  { key: 'large', label: '$100–500B', test: mc => mc >= 100e9 && mc < 500e9 },
-  { key: 'mid', label: '< $100B', test: mc => mc < 100e9 },
-];
 const EXCHANGES = ['NYSE', 'NASDAQ', 'AMEX'];
 
 const shortDate = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${+m}/${+d}/${y.slice(2)}`; };
@@ -317,7 +311,9 @@ function normalizeState(saved) {
     volStart: saved.volStart ?? 252,
     volEnd: saved.volEnd ?? 21,
     sortDir: saved.sortDir || 'desc',
-    capBand: saved.capBand || 'all',
+    // market-cap range filter, in dollars; null = unbounded on that side
+    capMin: typeof saved.capMin === 'number' ? saved.capMin : null,
+    capMax: typeof saved.capMax === 'number' ? saved.capMax : null,
     exch: Array.isArray(saved.exch) ? saved.exch : [],
     // second (blended / side-by-side) return window — default 6–1
     winB: saved.winB == null ? true : !!saved.winB,
@@ -379,7 +375,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
   // score every ticker with the configured window / mode / residual settings, then rank.
   // In residual mode, names lacking the 756d beta window are marked unavailable (hidden), not faked.
   const { rows: ranked, hidden } = useMemo(() => {
-    const band = CAP_BANDS.find(b => b.key === st.capBand) || CAP_BANDS[0];
+    const cLo = st.capMin, cHi = st.capMax;
     const exchSet = st.exch && st.exch.length ? new Set(st.exch) : null;
     const c = cfgOf(st, betaWindow);
     const cB = cfgOfB(st, betaWindow);
@@ -390,7 +386,8 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
     const out = [];
     let hidden = 0;
     for (const t of snap.tickers) {
-      if (!t.universes.includes(st.universe) || !band.test(t.marketCap || 0) || (exchSet && !exchSet.has(t.exchange))) continue;
+      const mc = t.marketCap || 0;
+      if (!t.universes.includes(st.universe) || (cLo != null && mc < cLo) || (cHi != null && mc > cHi) || (exchSet && !exchSet.has(t.exchange))) continue;
       const r = E.momentumScore(t.closes, market, st.asof, c);
       if (!r || r.score == null || Number.isNaN(r.score)) {
         if (c.removeMkt && E.momentumDaily(t.closes, st.asof, st.start, st.end)) hidden++;
@@ -411,7 +408,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
     out.forEach((o, i) => (o.rank = i + 1));
     return { rows: out, hidden };
   }, [snap, market, betaWindow, st.universe, st.asof, st.start, st.end, st.volStart, st.volEnd,
-      st.matchVol, st.mode, st.removeMkt, st.capBand, st.exch, st.sortDir,
+      st.matchVol, st.mode, st.removeMkt, st.capMin, st.capMax, st.exch, st.sortDir,
       st.winB, st.bStart, st.bEnd]);
 
   const q = query.trim().toUpperCase();
@@ -432,7 +429,11 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
   const corrMap = useMemo(
     () => basketCorrMap(ranked, st.selected, (s) => bySym[s], st.asof),
     [ranked, st.selected, st.asof, bySym]);
-  const sig = `${st.universe}|${st.mode}|${st.removeMkt}|${st.matchVol}|${st.sortDir}|${st.capBand}|${st.exch.join(',')}`;
+  const sig = `${st.universe}|${st.mode}|${st.removeMkt}|${st.matchVol}|${st.sortDir}|${st.capMin}|${st.capMax}|${st.exch.join(',')}`;
+  // market caps of the current universe (sorted asc) — feeds the cap slider's histogram + count
+  const uniCaps = useMemo(
+    () => snap.tickers.filter(t => t.universes.includes(st.universe)).map(t => t.marketCap || 0).filter(c => c > 0).sort((a, b) => a - b),
+    [snap, st.universe]);
   useEffect(() => {
     pulse.setValue(0.4);
     Animated.timing(pulse, { toValue: 1, duration: 260, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
@@ -459,7 +460,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
   };
   const setMode = (m) => { animateNext(); haptic('select'); persist({ ...st, mode: m, sortDir: m === 'vol' ? 'asc' : 'desc' }); };
   const setFilter = (patch) => { animateNext(); haptic('select'); persist({ ...st, ...patch }); };
-  const activeFilters = (st.capBand !== 'all' ? 1 : 0) + (st.exch.length ? 1 : 0);
+  const activeFilters = ((st.capMin != null || st.capMax != null) ? 1 : 0) + (st.exch.length ? 1 : 0);
   const modeLabel = (MODES.find(m => m.key === st.mode) || MODES[0]).short;
 
   const header = (
@@ -631,7 +632,7 @@ function Screener({ C, snap, market, st, persist, query, setQuery, onOpen, refre
         )} />
 
       <FilterSheet C={C} visible={filterOpen} onClose={() => setFilterOpen(false)}
-        st={st} setFilter={setFilter} />
+        st={st} setFilter={setFilter} caps={uniCaps} />
       <CueSheet C={C} visible={cueOpen} onClose={() => setCueOpen(false)} st={st} persist={persist} />
       <BooksSheet C={C} visible={booksOpen} onClose={() => setBooksOpen(false)} st={st} persist={persist} />
     </Animated.View>
@@ -851,7 +852,95 @@ function ScoreNote({ C, snap, st }) {
     </View>
   );
 }
-function FilterSheet({ C, visible, onClose, st, setFilter }) {
+// Log-scale market-cap range slider with a live count of names in range and a
+// mini histogram of the universe's cap distribution. Two draggable thumbs, built
+// on the touch responder (no native slider dependency).
+function CapSlider({ C, caps, capMin, capMax, onChange }) {
+  const [w, setW] = useState(0);
+  const pad = 13;                                   // thumb radius
+  const trackW = Math.max(1, w - 2 * pad);
+  const n = caps.length;
+  const loCap = n ? caps[0] : 2e9, hiCap = n ? caps[n - 1] : 4e12;
+  const dMin = Math.log10(Math.max(1e6, loCap));
+  const dMax = Math.max(dMin + 0.1, Math.log10(Math.max(loCap * 1.1, hiCap)));
+  const span = dMax - dMin;
+  const toF = (cap) => Math.max(0, Math.min(1, (Math.log10(Math.max(1, cap)) - dMin) / span));
+  const toCap = (f) => Math.pow(10, dMin + f * span);
+  const loF = capMin == null ? 0 : toF(capMin);
+  const hiF = capMax == null ? 1 : toF(capMax);
+
+  // histogram of caps over the log domain
+  const NB = 30;
+  const buckets = new Array(NB).fill(0);
+  for (const c of caps) buckets[Math.max(0, Math.min(NB - 1, Math.floor(toF(c) * NB)))]++;
+  const maxB = Math.max(...buckets, 1);
+
+  const count = caps.filter(c => (capMin == null || c >= capMin) && (capMax == null || c <= capMax)).length;
+  const lastCount = useRef(count); lastCount.current = count;
+  const active = useRef(null);
+
+  const fracAt = (e) => Math.max(0, Math.min(1, (e.nativeEvent.locationX - pad) / trackW));
+  const apply = (lf, hf) => {
+    const lo = lf <= 0.001 ? null : toCap(lf);
+    const hi = hf >= 0.999 ? null : toCap(hf);
+    const c = caps.filter(x => (lo == null || x >= lo) && (hi == null || x <= hi)).length;
+    if (c !== lastCount.current) { lastCount.current = c; haptic('light'); }
+    onChange(lo, hi);
+  };
+  const onGrant = (e) => {
+    const f = fracAt(e);
+    active.current = Math.abs(f - loF) <= Math.abs(f - hiF) ? 'lo' : 'hi';
+    onMove(e);
+  };
+  const onMove = (e) => {
+    const f = fracAt(e);
+    if (active.current === 'hi') apply(loF, Math.max(f, loF));
+    else apply(Math.min(f, hiF), hiF);
+  };
+
+  const displayLo = capMin == null ? loCap : capMin;
+  const displayHi = capMax == null ? hiCap : capMax;
+  const bounded = capMin != null || capMax != null;
+
+  return (
+    <View style={{ marginTop: 2, marginBottom: 6 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+        <Text style={[TNUM, { color: C.text, fontSize: 15, fontWeight: '800' }]}>
+          {E.fmtCap(displayLo)} <Text style={{ color: C.faint, fontWeight: '600' }}>–</Text> {capMax == null ? `${E.fmtCap(displayHi)}+` : E.fmtCap(displayHi)}
+        </Text>
+        <Text style={[TNUM, { color: bounded ? C.accent : C.muted, fontSize: 13, fontWeight: '800' }]}>{count} {count === 1 ? 'name' : 'names'}</Text>
+      </View>
+      <View onLayout={(e) => setW(e.nativeEvent.layout.width)}
+        onStartShouldSetResponder={() => true} onMoveShouldSetResponder={() => true}
+        onResponderGrant={onGrant} onResponderMove={onMove} onResponderRelease={() => { active.current = null; haptic('select'); }}
+        style={{ height: 66, justifyContent: 'flex-end' }}>
+        {/* histogram */}
+        {w > 0 ? (
+          <View style={{ position: 'absolute', left: pad, top: 0, width: trackW, height: 44, flexDirection: 'row', alignItems: 'flex-end' }}>
+            {buckets.map((b, i) => {
+              const inSel = (i + 0.5) / NB >= loF && (i + 0.5) / NB <= hiF;
+              return <View key={i} style={{ flex: 1, marginHorizontal: 0.5, height: Math.max(2, (b / maxB) * 44),
+                borderTopLeftRadius: 1.5, borderTopRightRadius: 1.5, backgroundColor: inSel ? C.accent : C.lineStrong, opacity: inSel ? 0.9 : 1 }} />;
+            })}
+          </View>
+        ) : null}
+        {/* track */}
+        <View style={{ position: 'absolute', left: pad, right: pad, bottom: 10, height: 4, borderRadius: 2, backgroundColor: C.surface2 }} />
+        {w > 0 ? (
+          <View style={{ position: 'absolute', left: pad + loF * trackW, bottom: 10, height: 4, borderRadius: 2, width: Math.max(0, (hiF - loF) * trackW), backgroundColor: C.accent }} />
+        ) : null}
+        {/* thumbs */}
+        {w > 0 ? [loF, hiF].map((f, i) => (
+          <View key={i} style={{ position: 'absolute', left: pad + f * trackW - 11, bottom: 1, width: 22, height: 22, borderRadius: 11,
+            backgroundColor: C.text, borderWidth: 3, borderColor: C.accent }} />
+        )) : null}
+      </View>
+      <Text style={{ color: C.faint, fontSize: 11, marginTop: 2 }}>Drag to set a market-cap range · log scale</Text>
+    </View>
+  );
+}
+
+function FilterSheet({ C, visible, onClose, st, setFilter, caps }) {
   const toggleExch = (ex) => {
     const set = new Set(st.exch);
     set.has(ex) ? set.delete(ex) : set.add(ex);
@@ -861,22 +950,13 @@ function FilterSheet({ C, visible, onClose, st, setFilter }) {
     <Sheet C={C} visible={visible} onClose={onClose}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
         <Text style={[styles.sheetTitle, { color: C.text, marginBottom: 0 }]}>Filter</Text>
-        <Pressable onPress={() => setFilter({ capBand: 'all', exch: [] })}>
+        <Pressable onPress={() => setFilter({ capMin: null, capMax: null, exch: [] })}>
           <Text style={{ color: C.accent, fontSize: 14, fontWeight: '700' }}>Reset</Text>
         </Pressable>
       </View>
       <Text style={[styles.filterLabel, { color: C.muted }]}>Market cap</Text>
-      <View style={styles.chipWrap}>
-        {CAP_BANDS.map(b => {
-          const on = st.capBand === b.key;
-          return (
-            <Pressable key={b.key} onPress={() => setFilter({ capBand: b.key })}
-              style={[styles.chip, { backgroundColor: on ? C.accent : C.surface2, borderColor: on ? C.accent : C.line }]}>
-              <Text style={{ color: on ? C.accentInk : C.muted, fontSize: 13, fontWeight: '700' }}>{b.label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      <CapSlider C={C} caps={caps || []} capMin={st.capMin} capMax={st.capMax}
+        onChange={(lo, hi) => setFilter({ capMin: lo, capMax: hi })} />
       <Text style={[styles.filterLabel, { color: C.muted }]}>Exchange</Text>
       <View style={styles.chipWrap}>
         {EXCHANGES.map(ex => {

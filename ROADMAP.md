@@ -33,7 +33,9 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 - 🟢 **Normalized 0–100 score** (optional) — a **linear rank percentile** over the universe: 100 =
   rank 1, 0 = last, 50 = median, each decile spans 10 points. Says where in the ranked order a name
   sits. Raw score stays as a subscript; any mode.
-- 🟢 Sort & filter (market-cap band, exchange); selection persisted **by date** (survives rebuilds).
+- 🟢 Sort & filter — a **log-scale market-cap range slider** with two thumbs, a live **count of names
+  in range**, and a mini histogram of the universe's cap distribution; exchange chips. Selection
+  persisted **by date** (survives rebuilds).
 - 🟢 **Checkmark select** — a round ＋ / ✓ button toggles a name into the basket (with a little
   bounce and a haptic); tapping the row body opens the detail. The button picks up the basket cue
   (teal when the name diversifies, filled green once held). Dual windows render as **two clean
