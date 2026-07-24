@@ -30,10 +30,9 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 - 🟡 **Correlation-to-basket cue** — as you scroll, redundant names (high ρ vs a held name) fade and
   get a **red dot + ≈ twin + red add button**; diversifiers (low ρ) get the complementary **teal dot +
   add button**. Thresholds are **user-configurable** (default: diversify < 0.45, redundant ≥ 0.60).
-- 🟢 **Normalized 0–100 score** (optional) — a **logistic curve calibrated to the universe's own
-  distribution**: the median name lands at **50**, and the scale is set from the deciles so the
-  10th/90th-percentile scores map to 10/90 (top & bottom deciles then occupy 90–100 / 0–10, with the
-  extremes at 0/100). Asymmetric scale handles skew. Raw score stays as a subscript; any mode.
+- 🟢 **Normalized 0–100 score** (optional) — a **linear rank percentile** over the universe: 100 =
+  rank 1, 0 = last, 50 = median, each decile spans 10 points. Says where in the ranked order a name
+  sits. Raw score stays as a subscript; any mode.
 - 🟢 Sort & filter (market-cap band, exchange); selection persisted **by date** (survives rebuilds).
 - 🟢 **Checkmark select** — a round ＋ / ✓ button toggles a name into the basket (with a little
   bounce and a haptic); tapping the row body opens the detail. The button picks up the basket cue
