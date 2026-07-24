@@ -65,6 +65,9 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 - 🟢 Interactive scrub chart with the **ranking window shaded** (dated), performance card
   (5d/10d/1m/3m/6m/1y), per-name β and annualized α.
 - 🟡 **Top-3 correlated peers** (latest 252d), tappable.
+- 🟢 **EMA overlays on the stock chart** — the same bi-color fast EMA + shaded regime fill + glow
+  cross markers as the Markets chart, with an on-page EMA control card (shared 50/200 settings).
+  Line-mode (stocks carry adjusted closes only); the ranking window shows as dashed guides.
 
 ### Markets (macro dashboard)
 - 🟡 **Markets tab** — 2×2 tiles (last · day change · session sparkline) for SPY / TLT / XLE / GLD.
