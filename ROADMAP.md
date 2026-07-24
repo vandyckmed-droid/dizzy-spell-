@@ -1,6 +1,6 @@
 # Roadmap
 
-Personal iPhone tool to **rank, select, and weight** stocks, with a **macro markets** dashboard.
+Personal iPhone **stock screener + portfolio analysis** tool — rank, select, and weight names.
 Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalone EAS build (not Expo Go).
 
 ---
@@ -15,8 +15,6 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 - 🟡 **Build-time data layer** — the FMP key is read only at build time (`$API_KEY`); it never ships
   in the artifact, the app, or the Snack. Refreshed on request; pull-to-refresh pulls the latest from
   the public repo (`main`).
-- 🟡 **Macro intraday layer** (`fetch_intraday.py`) — 5-min bars + daily OHLC for SPY/TLT/XLE/GLD,
-  merged into the snapshot; refreshable on its own.
 
 ### Screener & ranking
 - 🟡 **Configurable score** — return window (as-of / start / end), rank by **Return / Volatility /
@@ -62,32 +60,17 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
   and a **trim candidate** (weaker half of the most redundant pair), each one-tap actionable.
 - 🟢 Explanatory text tucked behind an **ⓘ** (HRP + effective-bets + "how many names" in a sheet).
 
-### Ticker detail
-- 🟢 Company logo, sector tag (tappable → that sector's universe).
-- 🟢 Interactive scrub chart with the **ranking window shaded** (dated), performance card
-  (5d/10d/1m/3m/6m/1y), per-name β and annualized α.
+### Ticker detail (numbers-focused)
+- 🟢 Company logo, sector tag (tappable → that sector's universe), industry / exchange / market-cap tags.
+- 🟢 Score stat cards — Sharpe / return / vol (or residual α, idio vol, β and annualized α when
+  market influence is removed) — plus a **performance table** (5d/10d/1m/3m/6m/1y).
 - 🟡 **Top-3 correlated peers** (latest 252d), tappable.
-- 🟢 **EMA overlays on the stock chart** — the same bi-color fast EMA + shaded regime fill + glow
-  cross markers as the Markets chart, with an on-page EMA control card (shared 50/200 settings).
-  Line-mode (stocks carry adjusted closes only); the ranking window shows as dashed guides.
-
-### Markets (macro dashboard)
-- 🟡 **Markets tab** — 2×2 tiles (last · day change · session sparkline) for SPY / TLT / XLE / GLD.
-- 🟡 **Rich chart** — timeframe **1D (5-min) · 6M · 1Y**, chart type **Line / OHLC bars**, crosshair
-  scrub, prev-close reference on 1D.
-- 🟢 **Configurable EMAs** — EMA-50 / EMA-200 on the daily views (on/off + period in **steps of 5**,
-  with a **↺ 50 / 200 reset**).
-- 🟢 **Golden / death cross effect** — the **fast EMA is bi-colored** (green above the slow EMA, red
-  below) with a matching **translucent fill** between the two lines, a thin base regime strip, and a
-  **soft round glow** at each crossover; toggleable.
-- 🟢 Seven macro symbols across assets — **SPY · TLT · HYG · XLE · GLD · UUP · VIX** (equities,
-  rates, credit, energy, metals, dollar, volatility).
 
 ### Design & reliability
 - 🟡 Robinhood-inspired dark theme (near-black, vivid green/red, tabular numerals, soft geometry).
 - 🟢 Static HTML artifact twin shares the validated engine.
 - 🟡 Numerics cross-checked vs a NumPy reference — `validate_js.mjs` (1007) + `verify_edge.mjs` (1317).
-- 🟢 Headless react-native-web render harness (Screener / Portfolio / Markets / detail, zero errors).
+- 🟢 Headless react-native-web render harness (Screener / Portfolio / detail, zero errors).
 - 🟡 **Fast first paint** — the app loads a **light snapshot** (recent ~300 days, `snapshot.lite.json`,
   ~557 KB gzipped vs 1.25 MB full) for instant render, then background-fetches the full 800-day
   history and hot-swaps it in (as-of persists by date, so the swap is seamless). Residual momentum
@@ -99,11 +82,11 @@ Effort tags: 🟢 small · 🟡 medium · 🔴 large.  ⚙️ = needs a standalo
 
 ## ⬜ Candidate — next
 
-### 🎯 Next up — portfolio backtest line
-Plot the current book's cumulative return, vol and max drawdown over the trailing 1–2y (vs SPY),
-periodically rebalanced to the chosen weighting scheme. Closes the loop: shows whether the
-momentum + weighting pipeline would actually have paid off. Needs care on rebalancing + no lookahead;
-be explicit that it's in-sample.
+### 🎯 Next up — portfolio backtest metrics
+The current book's **cumulative return, annualized vol, and max drawdown** over the trailing 1–2y
+(vs SPY), periodically rebalanced to the chosen weighting scheme — shown as a **numbers readout**
+(in keeping with the numbers-focused redesign). Closes the loop: does the momentum + weighting
+pipeline actually pay off? Needs care on rebalancing + no lookahead; be explicit that it's in-sample.
 
 ### Ranking
 - 🟡 Sector-relative ranking (rank within sector)
@@ -114,10 +97,6 @@ be explicit that it's in-sample.
 - 🟢 Swipe-to-hide rows on the Screener (with a reset) — deferred; checkmark select shipped
 - 🟢 More constraints (max holdings / cardinality, per-sector minimums)
 
-### Macro
-- 🟡 More symbols (USO oil, BTC, DXY when available)
-- 🟢 Multi-range / benchmark compare on the chart
-
 ### Workflow & data
 - 🟢 Export weights (CSV / shareable card)
 - 🟡 Scheduled auto-refresh (GitHub Action on a cron, FMP key as a repo secret)
@@ -127,6 +106,6 @@ be explicit that it's in-sample.
 ---
 
 ## Notes
-- Data refresh (key-free, build-time): `fetch_data.py` → `fetch_intraday.py` → **`make_light.py`**
-  (regenerates the light snapshot from the full). Intraday isn't baked for all 600 (size).
+- Data refresh (key-free, build-time): `fetch_data.py` → **`make_light.py`** (regenerates the light
+  snapshot from the full). The macro/intraday layer was removed in the screener + portfolio redesign.
 - The HTML artifact twin keeps the pre-Robinhood theme; the app is the primary surface.
