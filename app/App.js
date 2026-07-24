@@ -14,7 +14,6 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Svg, { Path, Defs, LinearGradient, RadialGradient, Stop, Line, Circle, Rect, Text as SvgText } from 'react-native-svg';
 import * as E from './engine';
 // First paint loads a LIGHT snapshot (recent ~300 days, marked partial); the full
 // 800-day history is fetched in the background and hot-swapped in (see Root).
@@ -64,10 +63,6 @@ const PERIODS = [['5-day',5],['10-day',10],['1-month',21],['3-month',63],['6-mon
 // Default 12–1 momentum window, rounded (250→20 instead of 252→21): cleaner and
 // leaves a day of slack for occasional end-of-day data lag.
 const DEF_START = 250, DEF_END = 20;
-// Macro dashboard chart config
-const MACRO_TFS = ['1D', '6M', '1Y'];
-const CHART_TYPES = [{ key: 'line', label: 'Line' }, { key: 'ohlc', label: 'Bars' }];
-const EMA_COLORS = ['#5AC8FA', '#FF9F0A'];   // EMA-1 (blue), EMA-2 (amber)
 
 // Ranking modes. The score is: return (annualized), volatility (annualized), or
 // their ratio (Sharpe). Return/vol windows are configurable; market influence is
@@ -222,17 +217,15 @@ function Root() {
     <SafeAreaView style={{ flex: 1, backgroundColor: C.ground }} edges={['top', 'left', 'right']}>
       <StatusBar style={scheme === 'light' ? 'dark' : 'light'} />
       <Animated.View style={{ flex: 1, opacity: fade }}>
-        {tab === 'screener'
-          ? <Screener C={C} snap={snap} market={market} st={st} persist={persist} query={query} setQuery={setQuery}
-              onOpen={setDetail} refreshing={refreshing} onRefresh={onRefresh} />
-          : tab === 'portfolio'
+        {tab === 'portfolio'
           ? <Portfolio C={C} snap={snap} market={market} st={st} persist={persist} onOpen={setDetail}
               refreshing={refreshing} onRefresh={onRefresh} />
-          : <Macro C={C} snap={snap} st={st} persist={persist} refreshing={refreshing} onRefresh={onRefresh} />}
+          : <Screener C={C} snap={snap} market={market} st={st} persist={persist} query={query} setQuery={setQuery}
+              onOpen={setDetail} refreshing={refreshing} onRefresh={onRefresh} />}
       </Animated.View>
       <TabBar C={C} tab={tab} setTab={setTab} count={st.selected.length} insets={insets} />
       <Modal visible={!!detail} animationType="slide" onRequestClose={() => setDetail(null)} presentationStyle="fullScreen">
-        {detail && <Detail C={C} snap={snap} market={market} st={st} sym={detail} persist={persist}
+        {detail && <Detail C={C} snap={snap} market={market} st={st} sym={detail}
           onClose={() => setDetail(null)} onToggle={(s) => persist(toggleSel(st, s))} onOpen={setDetail}
           onSector={(uid) => { animateNext(); persist({ ...st, universe: uid }); setDetail(null); setTab('screener'); }} />}
       </Modal>
@@ -323,15 +316,6 @@ function normalizeState(saved) {
     cueOn: saved.cueOn == null ? true : !!saved.cueOn,
     divRho: saved.divRho ?? 0.45,
     redRho: saved.redRho ?? 0.60,
-    // macro dashboard prefs
-    macroSym: saved.macroSym || null,
-    macroTf: MACRO_TFS.includes(saved.macroTf) ? saved.macroTf : '1D',
-    macroType: ['line', 'ohlc'].includes(saved.macroType) ? saved.macroType : 'line',
-    ema1On: saved.ema1On == null ? true : !!saved.ema1On,
-    ema1P: saved.ema1P ?? 50,
-    ema2On: saved.ema2On == null ? true : !!saved.ema2On,
-    ema2P: saved.ema2P ?? 200,
-    maCross: saved.maCross == null ? true : !!saved.maCross,
   };
 }
 function clampState(s, snap) {
@@ -349,10 +333,7 @@ function clampState(s, snap) {
   const volEnd = Math.max(1, Math.min(volStart - 2, s.volEnd | 0));
   const bStart = Math.max(3, Math.min(N - 1, s.bStart | 0));
   const bEnd = Math.max(1, Math.min(bStart - 2, s.bEnd | 0));
-  // EMA periods snap to multiples of 5 (repairs any off-by legacy values like 37/147)
-  const snap5 = (p, d) => Math.max(5, Math.min(400, Math.round((p || d) / 5) * 5));
-  const ema1P = snap5(s.ema1P, 50), ema2P = snap5(s.ema2P, 200);
-  return { ...s, universe: uni, asof, asofDate: snap.dates[asof], start, end, volStart, volEnd, bStart, bEnd, ema1P, ema2P };
+  return { ...s, universe: uni, asof, asofDate: snap.dates[asof], start, end, volStart, volEnd, bStart, bEnd };
 }
 function toggleSel(st, sym) {
   const set = new Set(st.selected);
@@ -1510,10 +1491,9 @@ function portfolioGuidance(snap, BYSYM, st, market, pf) {
 }
 
 /* ====================== Ticker detail ====================== */
-function Detail({ C, snap, market, st, sym, persist, onClose, onToggle, onOpen, onSector }) {
+function Detail({ C, snap, market, st, sym, onClose, onToggle, onOpen, onSector }) {
   const t = snap.tickers.find(x => x.symbol === sym);
   const insets = useSafeAreaInsets();
-  const setP = (patch) => { animateNext(); haptic('select'); persist({ ...st, ...patch }); };
   const peers = useMemo(() =>
     t ? topCorrelated(t, snap.tickers, st.asof, 3) : [],
     [snap, t, st.asof]);
@@ -1573,35 +1553,6 @@ function Detail({ C, snap, market, st, sym, persist, onClose, onToggle, onOpen, 
           </View>
         ) : null}
 
-        <View style={{ marginHorizontal: 16, marginBottom: 14 }}>
-          <ScrubChart C={C} snap={snap} ticker={t} st={st} />
-        </View>
-
-        <View style={{ marginHorizontal: 16, marginBottom: 14 }}>
-          <Card C={C}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
-              <Eyebrow C={C}>Moving averages</Eyebrow>
-              {(() => {
-                const isDef = st.ema1P === 50 && st.ema2P === 200 && st.ema1On && st.ema2On;
-                return (
-                  <Pressable disabled={isDef} accessibilityLabel="Reset EMAs to 50 / 200"
-                    onPress={() => { haptic('select'); setP({ ema1P: 50, ema2P: 200, ema1On: true, ema2On: true }); }}
-                    style={[styles.resetBtn, { borderColor: isDef ? C.line : C.accent, opacity: isDef ? 0.4 : 1 }]}>
-                    <Text style={{ color: isDef ? C.faint : C.accent, fontSize: 11.5, fontWeight: '800' }}>↺ 50 / 200</Text>
-                  </Pressable>
-                );
-              })()}
-            </View>
-            <EmaRow C={C} color={EMA_COLORS[0]} on={st.ema1On} period={st.ema1P}
-              onToggle={(v) => setP({ ema1On: v })} onSet={(p) => setP({ ema1P: p })} border />
-            <EmaRow C={C} color={EMA_COLORS[1]} on={st.ema2On} period={st.ema2P}
-              onToggle={(v) => setP({ ema2On: v })} onSet={(p) => setP({ ema2P: p })} border />
-            <ToggleRow C={C} border label="Golden / death cross"
-              sub={st.ema1On && st.ema2On ? 'bi-color fast EMA + shaded fill + glow markers' : 'needs both EMAs on'}
-              value={st.maCross} onChange={(v) => setP({ maCross: v })} />
-          </Card>
-        </View>
-
         <View style={{ marginHorizontal: 16 }}>
         <Card C={C} pad={false}>
           <Text style={{ color: C.faint, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase', padding: 16, paddingBottom: 6 }}>
@@ -1658,418 +1609,6 @@ function Detail({ C, snap, market, st, sym, persist, onClose, onToggle, onOpen, 
   );
 }
 
-/* ---- interactive, scrubbable price chart with the ranking window shaded ---- */
-function ScrubChart({ C, snap, ticker, st }) {
-  const [w, setW] = useState(0);
-  const [idx, setIdx] = useState(null);
-  const H = 210, padX = 6, padTop = 12, padBot = 16;
-
-  const end = st.asof;
-  const start0 = ticker.histStart || 0;   // skip leading nulls (pre-listing)
-  const series = ticker.closes.slice(start0, end + 1);
-  const dates = snap.dates.slice(start0, end + 1);
-  const n = series.length;
-  const winLo = Math.max(0, Math.min(n - 1, (st.asof - st.start) - start0));
-  const winHi = Math.max(0, Math.min(n - 1, (st.asof - st.end) - start0));
-
-  // EMA overlays (same settings as the Markets chart): a bi-colored fast EMA
-  // (green above the slow, red below) with a translucent regime fill, a base
-  // regime strip, and soft round glow markers at each golden/death cross.
-  const ema1 = st.ema1On ? emaSeries(series, st.ema1P) : null;
-  const ema2 = st.ema2On ? emaSeries(series, st.ema2P) : null;
-  const crossFx = st.maCross && ema1 && ema2;
-
-  let lo = Math.min(...series), hi = Math.max(...series);
-  const bumpArr = (a) => { if (a) for (const x of a) if (x != null) { if (x < lo) lo = x; if (x > hi) hi = x; } };
-  bumpArr(ema1); bumpArr(ema2);
-  const rng = (hi - lo) || 1;
-  const X = (i) => padX + (n <= 1 ? 0 : (i / (n - 1)) * (w - 2 * padX));
-  const Y = (v) => padTop + (1 - (v - lo) / rng) * (H - padTop - padBot);
-
-  const active = idx == null ? n - 1 : idx;
-  const base = series[winLo] || series[0];
-  const price = series[active];
-  const chg = price / base - 1;
-  const up = series[n - 1] >= (series[0] || series[n - 1]);
-  const col = up ? C.gain : C.loss;
-
-  const onTouch = (e) => {
-    if (!w) return;
-    const x = e.nativeEvent.locationX;
-    let i = Math.round(((x - padX) / (w - 2 * padX)) * (n - 1));
-    i = Math.max(0, Math.min(n - 1, i));
-    if (i !== idx) { setIdx(i); haptic('light'); }
-  };
-
-  let line = '', area = '';
-  if (w > 0 && n > 1) {
-    line = `M ${X(0)} ${Y(series[0])}`;
-    for (let i = 1; i < n; i++) line += ` L ${X(i)} ${Y(series[i])}`;
-    area = line + ` L ${X(n - 1)} ${H - padBot} L ${X(0)} ${H - padBot} Z`;
-  }
-
-  // golden/death-cross geometry (mirrors the Markets chart)
-  let bull = '', bear = '', fillUp = '', fillDown = '', fastUp = '', fastDown = '';
-  const crosses = [];
-  const yRib = H - padBot + 6;
-  let regimeUp = null;
-  if (crossFx && w > 0 && n > 1) {
-    for (let i = 0; i < n; i++) {
-      const a = ema1[i], b = ema2[i];
-      if (a == null || b == null) continue;
-      const upNow = a >= b; regimeUp = upNow;
-      const x1 = X(Math.max(0, i - 0.5)), x2 = X(Math.min(n - 1, i + 0.5));
-      const rib = `M ${x1} ${yRib} L ${x2} ${yRib} `;
-      if (upNow) bull += rib; else bear += rib;
-      const a0 = ema1[i - 1], b0 = ema2[i - 1];
-      if (i > 0 && a0 != null && b0 != null) {
-        const quad = `M ${X(i - 1)} ${Y(a0)} L ${X(i)} ${Y(a)} L ${X(i)} ${Y(b)} L ${X(i - 1)} ${Y(b0)} Z `;
-        const fseg = `M ${X(i - 1)} ${Y(a0)} L ${X(i)} ${Y(a)} `;
-        if (upNow) { fillUp += quad; fastUp += fseg; } else { fillDown += quad; fastDown += fseg; }
-        if ((a0 >= b0) !== upNow) crosses.push({ x: X(i), y: Y(a), golden: upNow });
-      }
-    }
-  }
-  const emaPath = (arr) => { let d = '', started = false; for (let i = 0; i < n; i++) { const yv = arr[i]; if (yv == null) { started = false; continue; } d += (started ? ' L' : ' M') + ` ${X(i)} ${Y(yv)}`; started = true; } return d; };
-
-  return (
-    <View style={[styles.cardPanel, { backgroundColor: C.surface, padding: 16 }]}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 6 }}>
-        <View>
-          <Text style={{ color: C.faint, fontSize: 10.5, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' }}>
-            {idx == null ? 'Adjusted close · as-of' : dates[active]}
-          </Text>
-          <Text style={[TNUM, { color: C.text, fontSize: 24, fontWeight: '800', letterSpacing: -0.5 }]}>
-            ${price != null ? price.toFixed(2) : '—'}
-          </Text>
-        </View>
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={[TNUM, { color: chg >= 0 ? C.gain : C.loss, fontSize: 17, fontWeight: '800' }]}>{E.signPct(chg, 1)}</Text>
-          <Text style={{ color: C.faint, fontSize: 10.5 }}>vs window open</Text>
-        </View>
-      </View>
-
-      <View onLayout={(e) => setW(e.nativeEvent.layout.width)}
-        onStartShouldSetResponder={() => true} onMoveShouldSetResponder={() => true}
-        onResponderGrant={onTouch} onResponderMove={onTouch} onResponderRelease={() => setIdx(null)}>
-        {w > 0 ? (
-          <Svg width={w} height={H}>
-            <Defs>
-              <LinearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0" stopColor={col} stopOpacity="0.26" />
-                <Stop offset="1" stopColor={col} stopOpacity="0" />
-              </LinearGradient>
-              <RadialGradient id="dglowUp" cx="50%" cy="50%" r="50%">
-                <Stop offset="0" stopColor={C.gain} stopOpacity="0.8" />
-                <Stop offset="0.45" stopColor={C.gain} stopOpacity="0.32" />
-                <Stop offset="1" stopColor={C.gain} stopOpacity="0" />
-              </RadialGradient>
-              <RadialGradient id="dglowDn" cx="50%" cy="50%" r="50%">
-                <Stop offset="0" stopColor={C.loss} stopOpacity="0.8" />
-                <Stop offset="0.45" stopColor={C.loss} stopOpacity="0.32" />
-                <Stop offset="1" stopColor={C.loss} stopOpacity="0" />
-              </RadialGradient>
-            </Defs>
-            {/* ranking window: a filled box on its own; subtle boundary lines when EMAs shade the chart */}
-            {winHi > winLo && !crossFx ? (
-              <Rect x={X(winLo)} y={padTop - 4} width={Math.max(1, X(winHi) - X(winLo))} height={H - padTop - padBot + 8}
-                fill={C.accentSoft} stroke={C.accent} strokeOpacity="0.35" strokeWidth="1" rx="3" />
-            ) : null}
-            {winHi > winLo && crossFx ? (
-              <>
-                <Line x1={X(winLo)} y1={padTop - 4} x2={X(winLo)} y2={H - padBot} stroke={C.accent} strokeOpacity="0.5" strokeWidth="1" strokeDasharray="2,4" />
-                <Line x1={X(winHi)} y1={padTop - 4} x2={X(winHi)} y2={H - padBot} stroke={C.accent} strokeOpacity="0.5" strokeWidth="1" strokeDasharray="2,4" />
-              </>
-            ) : null}
-            {winHi > winLo ? (
-              <SvgText x={X(winLo) + 2} y={H - 3} fontSize="9" fontWeight="600" fill={C.accent} textAnchor="start">{shortDate(dates[winLo])}</SvgText>
-            ) : null}
-            {winHi > winLo ? (
-              <SvgText x={X(winHi) - 2} y={H - 3} fontSize="9" fontWeight="600" fill={C.accent} textAnchor="end">{shortDate(dates[winHi])}</SvgText>
-            ) : null}
-            {/* regime fill between the EMAs */}
-            {crossFx ? <Path d={fillUp} fill={C.gain} fillOpacity="0.16" stroke="none" /> : null}
-            {crossFx ? <Path d={fillDown} fill={C.loss} fillOpacity="0.16" stroke="none" /> : null}
-            {/* price: area only when the regime fill isn't already shading the chart */}
-            {!crossFx ? <Path d={area} fill="url(#cg)" /> : null}
-            <Path d={line} stroke={col} strokeWidth="2.2" fill="none" strokeLinejoin="round" strokeLinecap="round" />
-            {/* base regime strip */}
-            {crossFx ? <Path d={bull} stroke={C.gain} strokeWidth="3" fill="none" strokeOpacity="0.9" strokeLinecap="round" /> : null}
-            {crossFx ? <Path d={bear} stroke={C.loss} strokeWidth="3" fill="none" strokeOpacity="0.9" strokeLinecap="round" /> : null}
-            {/* slow EMA (steady) + fast EMA (bi-color when the cross effect is on, else plain) */}
-            {ema2 ? <Path d={emaPath(ema2)} stroke={EMA_COLORS[1]} strokeWidth="1.5" fill="none" strokeOpacity="0.95" /> : null}
-            {crossFx ? <Path d={fastUp} stroke={C.gain} strokeWidth="2" fill="none" strokeLinejoin="round" strokeLinecap="round" /> : null}
-            {crossFx ? <Path d={fastDown} stroke={C.loss} strokeWidth="2" fill="none" strokeLinejoin="round" strokeLinecap="round" /> : null}
-            {ema1 && !crossFx ? <Path d={emaPath(ema1)} stroke={EMA_COLORS[0]} strokeWidth="1.5" fill="none" strokeOpacity="0.95" /> : null}
-            {crossFx ? crosses.map((cr, i) => (
-              <React.Fragment key={i}>
-                <Circle cx={cr.x} cy={cr.y} r="10" fill={cr.golden ? 'url(#dglowUp)' : 'url(#dglowDn)'} />
-                <Circle cx={cr.x} cy={cr.y} r="2.4" fill={cr.golden ? C.gain : C.loss} fillOpacity="0.92" />
-              </React.Fragment>
-            )) : null}
-            {idx != null ? (
-              <Line x1={X(active)} y1={padTop - 4} x2={X(active)} y2={H - padBot} stroke={C.text} strokeOpacity="0.4" strokeWidth="1" />
-            ) : null}
-            {idx != null ? (
-              <Circle cx={X(active)} cy={Y(price)} r="4.5" fill={col} stroke={C.surface} strokeWidth="2" />
-            ) : null}
-          </Svg>
-        ) : <View style={{ height: H }} />}
-      </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginTop: 8 }}>
-        {st.ema1On ? <Legend C={C} color={crossFx ? (regimeUp ? C.gain : C.loss) : EMA_COLORS[0]} text={`EMA ${st.ema1P}`} /> : null}
-        {st.ema2On ? <Legend C={C} color={EMA_COLORS[1]} text={`EMA ${st.ema2P}`} /> : null}
-        {crossFx ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: regimeUp ? C.gain : C.loss, opacity: 0.9 }} />
-            <Text style={{ color: C.faint, fontSize: 11 }}>{regimeUp ? 'golden' : 'death'} cross</Text>
-          </View>
-        ) : null}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-          <View style={{ width: 12, height: 0, borderTopWidth: 1, borderColor: C.accent, borderStyle: 'dashed' }} />
-          <Text style={{ color: C.faint, fontSize: 11 }}>ranking window · touch to inspect</Text>
-        </View>
-      </View>
-    </View>
-  );
-}
-
-/* ====================== Macro dashboard ====================== */
-// Exponential moving average, seeded with the SMA of the first `period` points.
-// Returns an array aligned to `vals` (null until the average is warm).
-function emaSeries(vals, period) {
-  const out = new Array(vals.length).fill(null);
-  if (!vals || period < 2 || vals.length < period) return out;
-  const k = 2 / (period + 1);
-  let sma = 0;
-  for (let i = 0; i < period; i++) sma += vals[i];
-  let prev = sma / period;
-  out[period - 1] = prev;
-  for (let i = period; i < vals.length; i++) { prev = vals[i] * k + prev * (1 - k); out[i] = prev; }
-  return out;
-}
-
-// Slice a macro symbol's stored series to the chosen timeframe. Daily timeframes
-// carry the full daily closes (fullC) + offset (from) so EMAs stay warm at the
-// left edge; the 1D view is the latest intraday session, based off prior close.
-function macroView(ser, tf) {
-  if (tf === '1D') {
-    const it = ser.intraday, t = (it && it.t) || [], n = t.length;
-    if (!n) return { isIntraday: true, from: 0, fullC: null, labels: [], o: [], h: [], l: [], c: [], baseline: 0 };
-    const day = t[n - 1].slice(0, 10);
-    let s = n - 1;
-    while (s > 0 && t[s - 1].slice(0, 10) === day) s--;
-    const dd = ser.daily.d; let prev = null;
-    for (let i = dd.length - 1; i >= 0; i--) { if (dd[i] < day) { prev = ser.daily.c[i]; break; } }
-    return { isIntraday: true, from: 0, fullC: null,
-      labels: t.slice(s), o: it.o.slice(s), h: it.h.slice(s), l: it.l.slice(s), c: it.c.slice(s),
-      baseline: prev != null ? prev : it.o[s] };
-  }
-  const dl = ser.daily, n = dl.c.length, count = tf === '6M' ? 126 : 252;
-  const from = Math.max(0, n - count), sl = (a) => a.slice(from);
-  const c = sl(dl.c);
-  return { isIntraday: false, from, fullC: dl.c,
-    labels: sl(dl.d), o: sl(dl.o), h: sl(dl.h), l: sl(dl.l), c, baseline: c[0] };
-}
-
-const fmtLabel = (s, intraday) => !s ? '' : (intraday ? s.slice(11, 16) : shortDate(s));
-
-function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P, maCross }) {
-  const [w, setW] = useState(0);
-  const [idx, setIdx] = useState(null);
-  const H = 244, padX = 8, padTop = 16, padBot = 22;
-  const v = useMemo(() => macroView(ser, tf), [ser, tf]);
-  const n = v.c.length;
-  const daily = !v.isIntraday;
-  // drop any scrub position when the view (symbol/timeframe) changes — a stale
-  // index from a longer series would otherwise overrun a shorter one's arrays
-  useEffect(() => { setIdx(null); }, [ser, tf]);
-  const ema1 = useMemo(() => (daily && ema1On && v.fullC) ? emaSeries(v.fullC, ema1P).slice(v.from) : null, [daily, ema1On, ema1P, v]);
-  const ema2 = useMemo(() => (daily && ema2On && v.fullC) ? emaSeries(v.fullC, ema2P).slice(v.from) : null, [daily, ema2On, ema2P, v]);
-
-  let lo = Infinity, hi = -Infinity;
-  const bump = (x) => { if (x != null) { if (x < lo) lo = x; if (x > hi) hi = x; } };
-  if (type === 'ohlc') for (let i = 0; i < n; i++) { bump(v.h[i]); bump(v.l[i]); }
-  else for (let i = 0; i < n; i++) bump(v.c[i]);
-  if (ema1) ema1.forEach(bump);
-  if (ema2) ema2.forEach(bump);
-  if (v.isIntraday) bump(v.baseline);
-  if (!isFinite(lo)) { lo = 0; hi = 1; }
-  const rng = (hi - lo) || 1;
-  const X = (i) => padX + (n <= 1 ? 0 : (i / (n - 1)) * (w - 2 * padX));
-  const Y = (val) => padTop + (1 - (val - lo) / rng) * (H - padTop - padBot);
-
-  const active = Math.max(0, Math.min(n - 1, idx == null ? n - 1 : idx));
-  const price = v.c[active];
-  const last = v.c[n - 1];
-  const chg = price / v.baseline - 1;
-  const up = last >= v.baseline;
-  const col = up ? C.gain : C.loss;
-  const ctx = v.isIntraday ? 'vs prev close' : (tf === '6M' ? 'over 6 months' : 'over 1 year');
-
-  const onTouch = (e) => {
-    if (!w) return;
-    let i = Math.round(((e.nativeEvent.locationX - padX) / (w - 2 * padX)) * (n - 1));
-    i = Math.max(0, Math.min(n - 1, i));
-    if (i !== idx) { setIdx(i); haptic('light'); }
-  };
-
-  // geometry
-  let line = '', area = '', upP = '', dnP = '';
-  const step = n > 1 ? (w - 2 * padX) / (n - 1) : w;
-  const tick = Math.max(1.4, Math.min(4.5, step * 0.34));
-  if (w > 0 && n > 1) {
-    if (type === 'line') {
-      line = `M ${X(0)} ${Y(v.c[0])}`;
-      for (let i = 1; i < n; i++) line += ` L ${X(i)} ${Y(v.c[i])}`;
-      area = line + ` L ${X(n - 1)} ${H - padBot} L ${X(0)} ${H - padBot} Z`;
-    } else {
-      for (let i = 0; i < n; i++) {
-        const x = X(i), seg = `M ${x} ${Y(v.h[i])} L ${x} ${Y(v.l[i])} M ${x - tick} ${Y(v.o[i])} L ${x} ${Y(v.o[i])} M ${x} ${Y(v.c[i])} L ${x + tick} ${Y(v.c[i])} `;
-        if (v.c[i] >= v.o[i]) upP += seg; else dnP += seg;
-      }
-    }
-  }
-  const emaPath = (arr) => {
-    let d = '', started = false;
-    for (let i = 0; i < n; i++) { const yv = arr[i]; if (yv == null) { started = false; continue; } d += (started ? ' L' : ' M') + ` ${X(i)} ${Y(yv)}`; started = true; }
-    return d;
-  };
-
-  // golden/death-cross effect: the fast EMA is drawn green where it's above the
-  // slow EMA and red where it's below, with a matching translucent fill between the
-  // two lines; a thin regime strip runs along the base and a soft round glow marks
-  // each crossover.
-  const crossFx = daily && maCross && ema1 && ema2;
-  let bull = '', bear = '', fillUp = '', fillDown = '', fastUp = '', fastDown = '';
-  const crosses = [];
-  const yRib = H - padBot + 8;
-  let regimeUp = null;
-  if (crossFx && w > 0 && n > 1) {
-    for (let i = 0; i < n; i++) {
-      const a = ema1[i], b = ema2[i];
-      if (a == null || b == null) continue;
-      const upNow = a >= b;
-      regimeUp = upNow;                                          // ends on the latest bar
-      const x1 = X(Math.max(0, i - 0.5)), x2 = X(Math.min(n - 1, i + 0.5));
-      const rib = `M ${x1} ${yRib} L ${x2} ${yRib} `;
-      if (upNow) bull += rib; else bear += rib;
-      const a0 = ema1[i - 1], b0 = ema2[i - 1];
-      if (i > 0 && a0 != null && b0 != null) {
-        // fill the gap between fast & slow for this interval, colored by regime
-        const quad = `M ${X(i - 1)} ${Y(a0)} L ${X(i)} ${Y(a)} L ${X(i)} ${Y(b)} L ${X(i - 1)} ${Y(b0)} Z `;
-        const fseg = `M ${X(i - 1)} ${Y(a0)} L ${X(i)} ${Y(a)} `;
-        if (upNow) { fillUp += quad; fastUp += fseg; } else { fillDown += quad; fastDown += fseg; }
-        if ((a0 >= b0) !== upNow) crosses.push({ x: X(i), y: Y(a), golden: upNow });
-      }
-    }
-  }
-
-  return (
-    <View>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 8 }}>
-        <View>
-          <Text style={{ color: C.faint, fontSize: 10.5, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' }}>
-            {idx == null ? (v.isIntraday ? 'Last · 5-min' : 'Close') : fmtLabel(v.labels[active], v.isIntraday)}
-          </Text>
-          <Text style={[TNUM, { color: C.text, fontSize: 26, fontWeight: '800', letterSpacing: -0.5 }]}>
-            ${price != null ? price.toFixed(2) : '—'}
-          </Text>
-        </View>
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={[TNUM, { color: chg >= 0 ? C.gain : C.loss, fontSize: 18, fontWeight: '800' }]}>{E.signPct(chg, 2)}</Text>
-          <Text style={{ color: C.faint, fontSize: 10.5 }}>{ctx}</Text>
-          {idx != null && type === 'ohlc' ? (
-            <Text style={[TNUM, { color: C.muted, fontSize: 10, marginTop: 2 }]}>
-              O {v.o[active].toFixed(2)} · H {v.h[active].toFixed(2)} · L {v.l[active].toFixed(2)}
-            </Text>
-          ) : null}
-        </View>
-      </View>
-
-      <View onLayout={(e) => setW(e.nativeEvent.layout.width)}
-        onStartShouldSetResponder={() => true} onMoveShouldSetResponder={() => true}
-        onResponderGrant={onTouch} onResponderMove={onTouch} onResponderRelease={() => setIdx(null)}>
-        {w > 0 ? (
-          <Svg width={w} height={H}>
-            <Defs>
-              <LinearGradient id="mg" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0" stopColor={col} stopOpacity="0.24" />
-                <Stop offset="1" stopColor={col} stopOpacity="0" />
-              </LinearGradient>
-              <RadialGradient id="glowUp" cx="50%" cy="50%" r="50%">
-                <Stop offset="0" stopColor={C.gain} stopOpacity="0.8" />
-                <Stop offset="0.45" stopColor={C.gain} stopOpacity="0.32" />
-                <Stop offset="1" stopColor={C.gain} stopOpacity="0" />
-              </RadialGradient>
-              <RadialGradient id="glowDn" cx="50%" cy="50%" r="50%">
-                <Stop offset="0" stopColor={C.loss} stopOpacity="0.8" />
-                <Stop offset="0.45" stopColor={C.loss} stopOpacity="0.32" />
-                <Stop offset="1" stopColor={C.loss} stopOpacity="0" />
-              </RadialGradient>
-            </Defs>
-            {v.isIntraday ? (
-              <Line x1={padX} y1={Y(v.baseline)} x2={w - padX} y2={Y(v.baseline)}
-                stroke={C.muted} strokeOpacity="0.5" strokeWidth="1" strokeDasharray="3,4" />
-            ) : null}
-            {type === 'line' ? <Path d={area} fill="url(#mg)" /> : null}
-            {type === 'line' ? <Path d={line} stroke={col} strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" /> : null}
-            {type === 'ohlc' ? <Path d={upP} stroke={C.gain} strokeWidth="1.5" fill="none" /> : null}
-            {type === 'ohlc' ? <Path d={dnP} stroke={C.loss} strokeWidth="1.5" fill="none" /> : null}
-            {/* translucent fill between fast & slow, colored by regime */}
-            {crossFx ? <Path d={fillUp} fill={C.gain} fillOpacity="0.16" stroke="none" /> : null}
-            {crossFx ? <Path d={fillDown} fill={C.loss} fillOpacity="0.16" stroke="none" /> : null}
-            {/* thin regime strip along the base */}
-            {crossFx ? <Path d={bull} stroke={C.gain} strokeWidth="3" fill="none" strokeOpacity="0.9" strokeLinecap="round" /> : null}
-            {crossFx ? <Path d={bear} stroke={C.loss} strokeWidth="3" fill="none" strokeOpacity="0.9" strokeLinecap="round" /> : null}
-            {/* slow EMA (steady reference) */}
-            {ema2 ? <Path d={emaPath(ema2)} stroke={EMA_COLORS[1]} strokeWidth="1.6" fill="none" strokeOpacity="0.95" /> : null}
-            {/* fast EMA — bi-colored by regime when the cross effect is on, else its plain color */}
-            {crossFx ? <Path d={fastUp} stroke={C.gain} strokeWidth="2.1" fill="none" strokeLinejoin="round" strokeLinecap="round" /> : null}
-            {crossFx ? <Path d={fastDown} stroke={C.loss} strokeWidth="2.1" fill="none" strokeLinejoin="round" strokeLinecap="round" /> : null}
-            {ema1 && !crossFx ? <Path d={emaPath(ema1)} stroke={EMA_COLORS[0]} strokeWidth="1.6" fill="none" strokeOpacity="0.95" /> : null}
-            {/* soft round glow at each crossover */}
-            {crossFx ? crosses.map((cr, i) => (
-              <React.Fragment key={i}>
-                <Circle cx={cr.x} cy={cr.y} r="11" fill={cr.golden ? 'url(#glowUp)' : 'url(#glowDn)'} />
-                <Circle cx={cr.x} cy={cr.y} r="2.6" fill={cr.golden ? C.gain : C.loss} fillOpacity="0.92" />
-              </React.Fragment>
-            )) : null}
-            <SvgText x={padX} y={H - 5} fontSize="9" fontWeight="600" fill={C.faint} textAnchor="start">{fmtLabel(v.labels[0], v.isIntraday)}</SvgText>
-            <SvgText x={w - padX} y={H - 5} fontSize="9" fontWeight="600" fill={C.faint} textAnchor="end">{fmtLabel(v.labels[n - 1], v.isIntraday)}</SvgText>
-            {idx != null ? <Line x1={X(active)} y1={padTop - 6} x2={X(active)} y2={H - padBot} stroke={C.text} strokeOpacity="0.4" strokeWidth="1" /> : null}
-            {idx != null && type === 'line' ? <Circle cx={X(active)} cy={Y(price)} r="4.5" fill={col} stroke={C.surface} strokeWidth="2" /> : null}
-          </Svg>
-        ) : <View style={{ height: H }} />}
-      </View>
-
-      <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginTop: 8 }}>
-        {daily && ema1On ? <Legend C={C} color={crossFx ? (regimeUp ? C.gain : C.loss) : EMA_COLORS[0]} text={`EMA ${ema1P}`} /> : null}
-        {daily && ema2On ? <Legend C={C} color={EMA_COLORS[1]} text={`EMA ${ema2P}`} /> : null}
-        {crossFx ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: regimeUp ? C.gain : C.loss, opacity: 0.9 }} />
-            <Text style={{ color: C.faint, fontSize: 11 }}>{regimeUp ? 'golden' : 'death'} cross · shaded regime</Text>
-          </View>
-        ) : (
-          <Text style={{ color: C.faint, fontSize: 11 }}>
-            {v.isIntraday ? '5-min bars · dashed = prev close · touch to inspect' : 'touch & drag to inspect'}
-          </Text>
-        )}
-      </View>
-    </View>
-  );
-}
-
-function Legend({ C, color, text }) {
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-      <View style={{ width: 14, height: 3, borderRadius: 2, backgroundColor: color }} />
-      <Text style={[TNUM, { color: C.muted, fontSize: 11 }]}>{text}</Text>
-    </View>
-  );
-}
-
 // generic equal-width segmented control
 function SegBar({ C, options, value, onChange }) {
   return (
@@ -2083,158 +1622,6 @@ function SegBar({ C, options, value, onChange }) {
           </Pressable>
         );
       })}
-    </View>
-  );
-}
-
-// today's session change + closes for a macro symbol
-function macroDay(ser) {
-  const it = ser.intraday, n = (it && it.t) ? it.t.length : 0;
-  if (!n) return { last: null, chg: 0, closes: [] };
-  const day = it.t[n - 1].slice(0, 10);
-  let s = n - 1;
-  while (s > 0 && it.t[s - 1].slice(0, 10) === day) s--;
-  const dd = ser.daily.d; let prev = null;
-  for (let i = dd.length - 1; i >= 0; i--) { if (dd[i] < day) { prev = ser.daily.c[i]; break; } }
-  const closes = it.c.slice(s), last = closes[closes.length - 1], base = prev != null ? prev : it.o[s];
-  return { last, chg: last / base - 1, closes };
-}
-
-function Spark({ C, vals, up, w = 74, h = 30 }) {
-  if (!vals || vals.length < 2 || !w) return <View style={{ width: w, height: h }} />;
-  const lo = Math.min(...vals), hi = Math.max(...vals), rng = (hi - lo) || 1;
-  const X = (i) => (i / (vals.length - 1)) * w;
-  const Y = (v) => 2 + (1 - (v - lo) / rng) * (h - 4);
-  let d = `M ${X(0)} ${Y(vals[0])}`;
-  for (let i = 1; i < vals.length; i++) d += ` L ${X(i)} ${Y(vals[i])}`;
-  return <Svg width={w} height={h}><Path d={d} stroke={up ? C.gain : C.loss} strokeWidth="1.6" fill="none" strokeLinejoin="round" /></Svg>;
-}
-
-function MacroTile({ C, meta, ser, selected, onPress }) {
-  const day = macroDay(ser);
-  const up = day.chg >= 0;
-  return (
-    <Pressable onPress={onPress} accessibilityLabel={`${meta.symbol} ${meta.label}`}
-      style={[styles.tile, { backgroundColor: C.surface, borderColor: selected ? C.accent : 'transparent', borderWidth: selected ? 1.5 : StyleSheet.hairlineWidth }]}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={[styles.tick, { color: C.text, fontSize: 16 }]}>{meta.disp || meta.symbol}</Text>
-          <Text numberOfLines={1} style={{ color: C.faint, fontSize: 10.5, marginTop: 1 }}>{meta.label}</Text>
-        </View>
-        <Spark C={C} vals={day.closes} up={up} />
-      </View>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 8 }}>
-        <Text style={[TNUM, { color: C.text, fontSize: 15, fontWeight: '800' }]}>{day.last != null ? day.last.toFixed(2) : '—'}</Text>
-        <Text style={[TNUM, { color: up ? C.gain : C.loss, fontSize: 13, fontWeight: '800' }]}>{E.signPct(day.chg, 2)}</Text>
-      </View>
-    </Pressable>
-  );
-}
-
-function Macro({ C, snap, st, persist, refreshing, onRefresh }) {
-  const macro = snap.macro;
-  const setP = (patch) => { haptic('select'); persist({ ...st, ...patch }); };
-  if (!macro || !macro.symbols || !macro.symbols.length) {
-    return (
-      <View style={{ alignItems: 'center', paddingVertical: 60, paddingHorizontal: 24 }}>
-        <Text style={{ fontSize: 38, color: C.muted, marginBottom: 10 }}>∿</Text>
-        <Text style={{ color: C.text, fontSize: 16, fontWeight: '700', marginBottom: 6 }}>No macro data yet</Text>
-        <Text style={{ color: C.muted, fontSize: 13.5, textAlign: 'center', lineHeight: 20 }}>
-          Pull to refresh once the snapshot includes the intraday macro layer.
-        </Text>
-      </View>
-    );
-  }
-  const syms = macro.symbols;
-  const cur = syms.find(s => s.symbol === st.macroSym) ? st.macroSym : syms[0].symbol;
-  const meta = syms.find(s => s.symbol === cur);
-  const ser = macro.series[cur];
-
-  return (
-    <ScrollView contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 96 }}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} />}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', paddingTop: 8, paddingBottom: 4, paddingHorizontal: 2 }}>
-        <Text style={{ color: C.text, fontSize: 30, fontWeight: '900', letterSpacing: -0.6 }}>Markets</Text>
-        <Text style={{ color: C.faint, fontSize: 11 }}>intraday · 5-min</Text>
-      </View>
-
-      <View style={styles.tileGrid}>
-        {syms.map(s => (
-          <MacroTile key={s.symbol} C={C} meta={s} ser={macro.series[s.symbol]}
-            selected={s.symbol === cur} onPress={() => setP({ macroSym: s.symbol })} />
-        ))}
-      </View>
-
-      <View style={[styles.cardPanel, { backgroundColor: C.surface, padding: 16, marginTop: 2 }]}>
-        <View style={{ marginBottom: 10 }}>
-          <Text style={{ color: C.text, fontSize: 18, fontWeight: '800' }}>{(meta.disp || meta.symbol)} · {meta.label}</Text>
-          <Text style={{ color: C.faint, fontSize: 12, marginTop: 1 }}>{meta.desc}</Text>
-        </View>
-        <MacroChart C={C} ser={ser} tf={st.macroTf} type={st.macroType}
-          ema1On={st.ema1On} ema1P={st.ema1P} ema2On={st.ema2On} ema2P={st.ema2P} maCross={st.maCross} />
-        <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
-          <View style={{ flex: 1 }}>
-            <SegBar C={C} value={st.macroTf} onChange={(k) => setP({ macroTf: k })}
-              options={MACRO_TFS.map(t => ({ key: t, label: t }))} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <SegBar C={C} value={st.macroType} onChange={(k) => setP({ macroType: k })} options={CHART_TYPES} />
-          </View>
-        </View>
-
-        {st.macroTf === '1D' ? (
-          <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 12 }}>Moving averages show on the 6M · 1Y daily views.</Text>
-        ) : (
-          <View style={{ marginTop: 6 }}>
-            {(() => {
-              const isDef = st.ema1P === 50 && st.ema2P === 200 && st.ema1On && st.ema2On;
-              return (
-                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 2 }}>
-                  <Pressable disabled={isDef} accessibilityLabel="Reset EMAs to 50 / 200"
-                    onPress={() => { haptic('select'); setP({ ema1P: 50, ema2P: 200, ema1On: true, ema2On: true }); }}
-                    style={[styles.resetBtn, { borderColor: isDef ? C.line : C.accent, opacity: isDef ? 0.4 : 1 }]}>
-                    <Text style={{ color: isDef ? C.faint : C.accent, fontSize: 11.5, fontWeight: '800' }}>↺ 50 / 200</Text>
-                  </Pressable>
-                </View>
-              );
-            })()}
-            <EmaRow C={C} color={EMA_COLORS[0]} on={st.ema1On} period={st.ema1P}
-              onToggle={(v) => setP({ ema1On: v })} onSet={(p) => setP({ ema1P: p })} />
-            <EmaRow C={C} color={EMA_COLORS[1]} on={st.ema2On} period={st.ema2P}
-              onToggle={(v) => setP({ ema2On: v })} onSet={(p) => setP({ ema2P: p })} border />
-            <ToggleRow C={C} border label="Golden / death cross"
-              sub={st.ema1On && st.ema2On ? 'bi-color fast EMA + shaded fill + glow markers' : 'needs both EMAs on'}
-              value={st.maCross} onChange={(v) => setP({ maCross: v })} />
-          </View>
-        )}
-      </View>
-    </ScrollView>
-  );
-}
-
-// EMA control: colored swatch + on/off + period stepper (multiples of 5, 5–400)
-function EmaRow({ C, color, on, period, onToggle, onSet, border }) {
-  const clamp = (p) => Math.max(5, Math.min(400, p));
-  // snap to the previous / next multiple of 5, so the sequence is 5,10,15,… not 2,7,12
-  const dec = () => onSet(clamp((Math.ceil(period / 5) - 1) * 5));
-  const inc = () => onSet(clamp((Math.floor(period / 5) + 1) * 5));
-  return (
-    <View style={[styles.ctlRow, border && { borderTopColor: C.line, borderTopWidth: 1 }]}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-        <View style={{ width: 16, height: 3, borderRadius: 2, backgroundColor: on ? color : C.faint }} />
-        <Text style={{ color: C.text, fontSize: 13.5 }}>EMA</Text>
-      </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-        <View style={[styles.stepper, { backgroundColor: C.surface2, borderColor: C.line, opacity: on ? 1 : 0.4 }]}>
-          <Pressable disabled={!on} onPress={dec} style={styles.stepBtn} hitSlop={6}>
-            <Text style={{ color: C.accent, fontSize: 22, fontWeight: '600' }}>−</Text></Pressable>
-          <Text style={[TNUM, { color: C.text, fontSize: 15, fontWeight: '700', minWidth: 40, textAlign: 'center' }]}>{period}</Text>
-          <Pressable disabled={!on} onPress={inc} style={styles.stepBtn} hitSlop={6}>
-            <Text style={{ color: C.accent, fontSize: 20, fontWeight: '600' }}>+</Text></Pressable>
-        </View>
-        <Switch value={on} onValueChange={onToggle}
-          trackColor={{ false: C.surface2, true: C.accent }} thumbColor="#fff" ios_backgroundColor={C.surface2} />
-      </View>
     </View>
   );
 }
@@ -2306,7 +1693,7 @@ function TabBar({ C, tab, setTab, count, insets }) {
   const go = (t) => { haptic('light'); setTab(t); };
   return (
     <View style={[styles.tabbar, { backgroundColor: C.ground, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.line, paddingBottom: Math.max(insets.bottom, 8) }]}>
-      {[['screener', '▚', 'Screener'], ['portfolio', '◈', 'Portfolio'], ['macro', '∿', 'Markets']].map(([id, ic, label]) => {
+      {[['screener', '▚', 'Screener'], ['portfolio', '◈', 'Portfolio']].map(([id, ic, label]) => {
         const on = tab === id;
         return (
           <Pressable key={id} style={styles.tabBtn} onPress={() => go(id)}>

@@ -49,7 +49,8 @@ def main():
     lite["market"] = lite_market
     lite["partial"] = True
     lite["liteDays"] = k
-    # macro, universes, marketSymbol, betaWindow, counts, generatedAt carry over as-is
+    lite.pop("macro", None)   # macro dashboard removed; drop the intraday/OHLC blob
+    # universes, marketSymbol, betaWindow, counts, generatedAt carry over as-is
 
     with open(LITE, "w") as f:
         json.dump(lite, f, separators=(",", ":"))
