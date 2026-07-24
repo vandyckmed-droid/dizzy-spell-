@@ -14,7 +14,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Svg, { Path, Defs, LinearGradient, Stop, Line, Circle, Rect, Text as SvgText } from 'react-native-svg';
+import Svg, { Path, Defs, LinearGradient, RadialGradient, Stop, Line, Circle, Rect, Text as SvgText } from 'react-native-svg';
 import * as E from './engine';
 // First paint loads a LIGHT snapshot (recent ~300 days, marked partial); the full
 // 800-day history is fetched in the background and hot-swapped in (see Root).
@@ -353,7 +353,10 @@ function clampState(s, snap) {
   const volEnd = Math.max(1, Math.min(volStart - 2, s.volEnd | 0));
   const bStart = Math.max(3, Math.min(N - 1, s.bStart | 0));
   const bEnd = Math.max(1, Math.min(bStart - 2, s.bEnd | 0));
-  return { ...s, universe: uni, asof, asofDate: snap.dates[asof], start, end, volStart, volEnd, bStart, bEnd };
+  // EMA periods snap to multiples of 5 (repairs any off-by legacy values like 37/147)
+  const snap5 = (p, d) => Math.max(5, Math.min(400, Math.round((p || d) / 5) * 5));
+  const ema1P = snap5(s.ema1P, 50), ema2P = snap5(s.ema2P, 200);
+  return { ...s, universe: uni, asof, asofDate: snap.dates[asof], start, end, volStart, volEnd, bStart, bEnd, ema1P, ema2P };
 }
 function toggleSel(st, sym) {
   const set = new Set(st.selected);
@@ -1754,22 +1757,31 @@ function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P, maCross })
     return d;
   };
 
-  // golden/death-cross effect: a regime ribbon (fast>slow green, fast<slow red)
-  // along the base + a diamond marker at each crossover of the two EMAs
+  // golden/death-cross effect: the fast EMA is drawn green where it's above the
+  // slow EMA and red where it's below, with a matching translucent fill between the
+  // two lines; a thin regime strip runs along the base and a soft round glow marks
+  // each crossover.
   const crossFx = daily && maCross && ema1 && ema2;
-  let bull = '', bear = '';
+  let bull = '', bear = '', fillUp = '', fillDown = '', fastUp = '', fastDown = '';
   const crosses = [];
   const yRib = H - padBot + 8;
+  let regimeUp = null;
   if (crossFx && w > 0 && n > 1) {
     for (let i = 0; i < n; i++) {
       const a = ema1[i], b = ema2[i];
       if (a == null || b == null) continue;
       const upNow = a >= b;
+      regimeUp = upNow;                                          // ends on the latest bar
       const x1 = X(Math.max(0, i - 0.5)), x2 = X(Math.min(n - 1, i + 0.5));
-      const seg = `M ${x1} ${yRib} L ${x2} ${yRib} `;
-      if (upNow) bull += seg; else bear += seg;
-      if (i > 0 && ema1[i - 1] != null && ema2[i - 1] != null && (ema1[i - 1] >= ema2[i - 1]) !== upNow) {
-        crosses.push({ x: X(i), y: Y(a), golden: upNow });
+      const rib = `M ${x1} ${yRib} L ${x2} ${yRib} `;
+      if (upNow) bull += rib; else bear += rib;
+      const a0 = ema1[i - 1], b0 = ema2[i - 1];
+      if (i > 0 && a0 != null && b0 != null) {
+        // fill the gap between fast & slow for this interval, colored by regime
+        const quad = `M ${X(i - 1)} ${Y(a0)} L ${X(i)} ${Y(a)} L ${X(i)} ${Y(b)} L ${X(i - 1)} ${Y(b0)} Z `;
+        const fseg = `M ${X(i - 1)} ${Y(a0)} L ${X(i)} ${Y(a)} `;
+        if (upNow) { fillUp += quad; fastUp += fseg; } else { fillDown += quad; fastDown += fseg; }
+        if ((a0 >= b0) !== upNow) crosses.push({ x: X(i), y: Y(a), golden: upNow });
       }
     }
   }
@@ -1806,6 +1818,16 @@ function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P, maCross })
                 <Stop offset="0" stopColor={col} stopOpacity="0.24" />
                 <Stop offset="1" stopColor={col} stopOpacity="0" />
               </LinearGradient>
+              <RadialGradient id="glowUp" cx="50%" cy="50%" r="50%">
+                <Stop offset="0" stopColor={C.gain} stopOpacity="0.8" />
+                <Stop offset="0.45" stopColor={C.gain} stopOpacity="0.32" />
+                <Stop offset="1" stopColor={C.gain} stopOpacity="0" />
+              </RadialGradient>
+              <RadialGradient id="glowDn" cx="50%" cy="50%" r="50%">
+                <Stop offset="0" stopColor={C.loss} stopOpacity="0.8" />
+                <Stop offset="0.45" stopColor={C.loss} stopOpacity="0.32" />
+                <Stop offset="1" stopColor={C.loss} stopOpacity="0" />
+              </RadialGradient>
             </Defs>
             {v.isIntraday ? (
               <Line x1={padX} y1={Y(v.baseline)} x2={w - padX} y2={Y(v.baseline)}
@@ -1815,13 +1837,24 @@ function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P, maCross })
             {type === 'line' ? <Path d={line} stroke={col} strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" /> : null}
             {type === 'ohlc' ? <Path d={upP} stroke={C.gain} strokeWidth="1.5" fill="none" /> : null}
             {type === 'ohlc' ? <Path d={dnP} stroke={C.loss} strokeWidth="1.5" fill="none" /> : null}
+            {/* translucent fill between fast & slow, colored by regime */}
+            {crossFx ? <Path d={fillUp} fill={C.gain} fillOpacity="0.16" stroke="none" /> : null}
+            {crossFx ? <Path d={fillDown} fill={C.loss} fillOpacity="0.16" stroke="none" /> : null}
+            {/* thin regime strip along the base */}
             {crossFx ? <Path d={bull} stroke={C.gain} strokeWidth="3" fill="none" strokeOpacity="0.9" strokeLinecap="round" /> : null}
             {crossFx ? <Path d={bear} stroke={C.loss} strokeWidth="3" fill="none" strokeOpacity="0.9" strokeLinecap="round" /> : null}
-            {ema1 ? <Path d={emaPath(ema1)} stroke={EMA_COLORS[0]} strokeWidth="1.6" fill="none" strokeOpacity="0.95" /> : null}
+            {/* slow EMA (steady reference) */}
             {ema2 ? <Path d={emaPath(ema2)} stroke={EMA_COLORS[1]} strokeWidth="1.6" fill="none" strokeOpacity="0.95" /> : null}
+            {/* fast EMA — bi-colored by regime when the cross effect is on, else its plain color */}
+            {crossFx ? <Path d={fastUp} stroke={C.gain} strokeWidth="2.1" fill="none" strokeLinejoin="round" strokeLinecap="round" /> : null}
+            {crossFx ? <Path d={fastDown} stroke={C.loss} strokeWidth="2.1" fill="none" strokeLinejoin="round" strokeLinecap="round" /> : null}
+            {ema1 && !crossFx ? <Path d={emaPath(ema1)} stroke={EMA_COLORS[0]} strokeWidth="1.6" fill="none" strokeOpacity="0.95" /> : null}
+            {/* soft round glow at each crossover */}
             {crossFx ? crosses.map((cr, i) => (
-              <Path key={i} d={`M ${cr.x} ${cr.y - 5} L ${cr.x + 5} ${cr.y} L ${cr.x} ${cr.y + 5} L ${cr.x - 5} ${cr.y} Z`}
-                fill={cr.golden ? '#FFD60A' : C.loss} stroke={C.surface} strokeWidth="1" />
+              <React.Fragment key={i}>
+                <Circle cx={cr.x} cy={cr.y} r="11" fill={cr.golden ? 'url(#glowUp)' : 'url(#glowDn)'} />
+                <Circle cx={cr.x} cy={cr.y} r="2.6" fill={cr.golden ? C.gain : C.loss} fillOpacity="0.92" />
+              </React.Fragment>
             )) : null}
             <SvgText x={padX} y={H - 5} fontSize="9" fontWeight="600" fill={C.faint} textAnchor="start">{fmtLabel(v.labels[0], v.isIntraday)}</SvgText>
             <SvgText x={w - padX} y={H - 5} fontSize="9" fontWeight="600" fill={C.faint} textAnchor="end">{fmtLabel(v.labels[n - 1], v.isIntraday)}</SvgText>
@@ -1832,9 +1865,14 @@ function MacroChart({ C, ser, tf, type, ema1On, ema1P, ema2On, ema2P, maCross })
       </View>
 
       <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginTop: 8 }}>
-        {daily && ema1On ? <Legend C={C} color={EMA_COLORS[0]} text={`EMA ${ema1P}`} /> : null}
+        {daily && ema1On ? <Legend C={C} color={crossFx ? (regimeUp ? C.gain : C.loss) : EMA_COLORS[0]} text={`EMA ${ema1P}`} /> : null}
         {daily && ema2On ? <Legend C={C} color={EMA_COLORS[1]} text={`EMA ${ema2P}`} /> : null}
-        {crossFx ? <Text style={{ color: C.faint, fontSize: 11 }}>◆ golden / death cross · regime ribbon</Text> : (
+        {crossFx ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: regimeUp ? C.gain : C.loss, opacity: 0.9 }} />
+            <Text style={{ color: C.faint, fontSize: 11 }}>{regimeUp ? 'golden' : 'death'} cross · shaded regime</Text>
+          </View>
+        ) : (
           <Text style={{ color: C.faint, fontSize: 11 }}>
             {v.isIntraday ? '5-min bars · dashed = prev close · touch to inspect' : 'touch & drag to inspect'}
           </Text>
@@ -1969,12 +2007,24 @@ function Macro({ C, snap, st, persist, refreshing, onRefresh }) {
           <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 12 }}>Moving averages show on the 6M · 1Y daily views.</Text>
         ) : (
           <View style={{ marginTop: 6 }}>
+            {(() => {
+              const isDef = st.ema1P === 50 && st.ema2P === 200 && st.ema1On && st.ema2On;
+              return (
+                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 2 }}>
+                  <Pressable disabled={isDef} accessibilityLabel="Reset EMAs to 50 / 200"
+                    onPress={() => { haptic('select'); setP({ ema1P: 50, ema2P: 200, ema1On: true, ema2On: true }); }}
+                    style={[styles.resetBtn, { borderColor: isDef ? C.line : C.accent, opacity: isDef ? 0.4 : 1 }]}>
+                    <Text style={{ color: isDef ? C.faint : C.accent, fontSize: 11.5, fontWeight: '800' }}>↺ 50 / 200</Text>
+                  </Pressable>
+                </View>
+              );
+            })()}
             <EmaRow C={C} color={EMA_COLORS[0]} on={st.ema1On} period={st.ema1P}
-              onToggle={(v) => setP({ ema1On: v })} onSet={(p) => setP({ ema1P: p })} border />
+              onToggle={(v) => setP({ ema1On: v })} onSet={(p) => setP({ ema1P: p })} />
             <EmaRow C={C} color={EMA_COLORS[1]} on={st.ema2On} period={st.ema2P}
               onToggle={(v) => setP({ ema2On: v })} onSet={(p) => setP({ ema2P: p })} border />
             <ToggleRow C={C} border label="Golden / death cross"
-              sub={st.ema1On && st.ema2On ? 'regime ribbon + cross markers' : 'needs both EMAs on'}
+              sub={st.ema1On && st.ema2On ? 'bi-color fast EMA + shaded fill + glow markers' : 'needs both EMAs on'}
               value={st.maCross} onChange={(v) => setP({ maCross: v })} />
           </View>
         )}
@@ -1983,9 +2033,12 @@ function Macro({ C, snap, st, persist, refreshing, onRefresh }) {
   );
 }
 
-// EMA control: colored swatch + on/off + period stepper (clamped 2–400)
+// EMA control: colored swatch + on/off + period stepper (multiples of 5, 5–400)
 function EmaRow({ C, color, on, period, onToggle, onSet, border }) {
-  const clamp = (p) => Math.max(2, Math.min(400, p));
+  const clamp = (p) => Math.max(5, Math.min(400, p));
+  // snap to the previous / next multiple of 5, so the sequence is 5,10,15,… not 2,7,12
+  const dec = () => onSet(clamp((Math.ceil(period / 5) - 1) * 5));
+  const inc = () => onSet(clamp((Math.floor(period / 5) + 1) * 5));
   return (
     <View style={[styles.ctlRow, border && { borderTopColor: C.line, borderTopWidth: 1 }]}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
@@ -1994,10 +2047,10 @@ function EmaRow({ C, color, on, period, onToggle, onSet, border }) {
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
         <View style={[styles.stepper, { backgroundColor: C.surface2, borderColor: C.line, opacity: on ? 1 : 0.4 }]}>
-          <Pressable disabled={!on} onPress={() => onSet(clamp(period - 5))} style={styles.stepBtn} hitSlop={6}>
+          <Pressable disabled={!on} onPress={dec} style={styles.stepBtn} hitSlop={6}>
             <Text style={{ color: C.accent, fontSize: 22, fontWeight: '600' }}>−</Text></Pressable>
           <Text style={[TNUM, { color: C.text, fontSize: 15, fontWeight: '700', minWidth: 40, textAlign: 'center' }]}>{period}</Text>
-          <Pressable disabled={!on} onPress={() => onSet(clamp(period + 5))} style={styles.stepBtn} hitSlop={6}>
+          <Pressable disabled={!on} onPress={inc} style={styles.stepBtn} hitSlop={6}>
             <Text style={{ color: C.accent, fontSize: 20, fontWeight: '600' }}>+</Text></Pressable>
         </View>
         <Switch value={on} onValueChange={onToggle}
